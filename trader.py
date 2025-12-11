@@ -3,10 +3,12 @@ import json
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
+# from config import BINANCE_API_KEY1, BINANCE_API_SECRET1
 from account_positions import get_account_status
 import time
 
 client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+# client = Client(api_key=BINANCE_API_KEY1, api_secret=BINANCE_API_SECRET1, testnet=True)
 REDIS_KEY = "trading_records"
 
 TP_SL_TYPES = {
@@ -60,12 +62,15 @@ def cancel_algo_order(symbol, algoId=None, clientAlgoId=None):
     except Exception as e:
         print(f"⚠ 撤销条件单失败: algoId={algoId}, clientAlgoId={clientAlgoId}, 错误: {e}")
 
+
 # ===============================
 # 下单 TP/SL（独立函数）
 # ===============================
+
 def _cancel_tp_sl(symbol, position_side, cancel_sl=True, cancel_tp=True):
     """
-    取消指定方向、指定类型的 TP/SL（仅基础挂单，不再处理条件单）
+    取消指定方向、指定类型的 TP/SL
+    支持基础挂单 + 条件单
     """
     types_to_cancel = []
     if cancel_sl:
@@ -76,7 +81,7 @@ def _cancel_tp_sl(symbol, position_side, cancel_sl=True, cancel_tp=True):
         return
 
     # -------------------------------
-    # 取消基础挂单
+    # 1️⃣ 取消基础挂单
     # -------------------------------
     try:
         open_orders = client.futures_get_open_orders(symbol=symbol)
@@ -96,43 +101,25 @@ def _cancel_tp_sl(symbol, position_side, cancel_sl=True, cancel_tp=True):
                 seen_ids.add(oid)
                 try:
                     client.futures_cancel_order(symbol=symbol, orderId=oid)
-                    print(f"♻ 取消基础单 {position_side} {o['type']} | id={oid} stop={o.get('stopPrice')}")
+                    print(
+                        f"♻ 取消基础单 {position_side} {o['type']} | id={oid} stop={o.get('stopPrice')}"
+                    )
                 except Exception as e:
                     print(f"⚠ 取消基础单失败 id={oid}: {e}")
 
-def _place_tp_sl(symbol, position_side, sl=None, tp=None):
-    """
-    下止损/止盈单（仅使用基础挂单）
-    """
-    if sl:
-        try:
-            client.futures_create_order(
-                symbol=symbol,
-                side="SELL" if position_side == "LONG" else "BUY",
-                positionSide=position_side,
-                type="STOP_MARKET",  # 基础止损单
-                stopPrice=float(sl),
-                closePosition=True,
-                timeInForce="GTC"
-            )
-            print(f"🛑 设置止损单成功 {symbol}: {sl}")
-        except Exception as e:
-            print(f"⚠ 止损单下单失败 {symbol}: {e}")
+    # -------------------------------
+    # 2️⃣ 取消条件单（Algo Order）
+    # -------------------------------
+    try:
+        algo_orders = client.futures_get_open_orders(symbol=symbol, conditional=True)
+    except Exception as e:
+        print(f"⚠ 获取条件单失败: {e}")
+        algo_orders = []
 
-    if tp:
-        try:
-            client.futures_create_order(
-                symbol=symbol,
-                side="SELL" if position_side == "LONG" else "BUY",
-                positionSide=position_side,
-                type="TAKE_PROFIT_MARKET",  # 基础止盈单
-                stopPrice=float(tp),
-                closePosition=True,
-                timeInForce="GTC"
-            )
-            print(f"🎯 设置止盈单成功 {symbol}: {tp}")
-        except Exception as e:
-            print(f"⚠ 止盈单下单失败 {symbol}: {e}")
+    for o in algo_orders:
+        if o.get("positionSide") == position_side and o.get("orderType") in types_to_cancel:
+            cancel_algo_order(algoId=o.get("algoId"), clientAlgoId=o.get("clientAlgoId"))
+
 
 def _place_tp_sl(symbol, position_side, sl=None, tp=None):
     """
@@ -168,6 +155,7 @@ def _place_tp_sl(symbol, position_side, sl=None, tp=None):
         except Exception as e:
             print(f"⚠ 止盈条件单下单失败 {symbol}: {e}")
 
+
 def _update_tp_sl(symbol, position_side, sl=None, tp=None):
     """
     更新止盈止损：
@@ -177,11 +165,11 @@ def _update_tp_sl(symbol, position_side, sl=None, tp=None):
     """
     # 先取消已有对应类型单
     _cancel_tp_sl(symbol, position_side, cancel_sl=bool(sl), cancel_tp=bool(tp))
-    time.sleep(0.3)  # 等待 Binance 处理旧订单
+    time.sleep(1)  # 等待 Binance 处理旧订单
 
     # 下新 TP/SL 条件单
     _place_tp_sl(symbol, position_side, sl, tp)
-    
+
 # ===============================
 # 主交易执行
 # ===============================
