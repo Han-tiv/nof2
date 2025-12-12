@@ -76,6 +76,7 @@ async def schedule_loop_async():
                         exec_list = []     # 最终需要执行的信号
 
                         for sig in ai_res:
+                            # print("🔹 AI 信号:", sig)
                             symbol = sig.get("symbol")
                             action = sig.get("action")
 

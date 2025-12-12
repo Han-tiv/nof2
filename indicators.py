@@ -102,12 +102,14 @@ def calculate_signal(symbol, interval):
 
     # 🔥 CVD 系列指标
     cvd_pack = compute_cvd_indicators(rows)
+    atr_ratio = float(atr_current) / float(atr_ma20) if atr_ma20 > 0 else 1.0
 
     # 汇总指标
     indicators = {
         **cvd_pack,
         "ATR": float(atr_current),
         "ATR_MA20": float(atr_ma20),
+        "ATR_RATIO": round(atr_ratio, 6),  # 新增
     }
 
     # 仅投喂最近 10 根 K 线

@@ -5,6 +5,7 @@ from binance.exceptions import BinanceAPIException
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
 from account_positions import get_account_status
 import time
+import math
 
 client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 REDIS_KEY = "trading_records"
@@ -19,7 +20,6 @@ def save_trade_record(record: dict):
     redis_client.lpush(REDIS_KEY, json.dumps(record))
 
 def _normalize_qty(symbol: str, qty: float):
-    """按精度修正数量"""
     info = client.futures_exchange_info()
     for s in info.get("symbols", []):
         if s.get("symbol") == symbol:
@@ -29,7 +29,11 @@ def _normalize_qty(symbol: str, qty: float):
                     min_qty = float(f.get("minQty", 0))
                     if qty < min_qty:
                         qty = min_qty
-                    qty = qty - (qty % step)
+                    # 修正精度
+                    qty = math.floor(qty / step) * step
+                    # 保留 step 对应的小数位
+                    decimals = max(0, -int(math.log10(step)))
+                    qty = round(qty, decimals)
                     return qty
     return qty
 
@@ -64,7 +68,6 @@ def cancel_algo_order(symbol, algoId=None, clientAlgoId=None):
 # ===============================
 # 下单 TP/SL（独立函数）
 # ===============================
-
 def _cancel_tp_sl(symbol, position_side, cancel_sl=True, cancel_tp=True):
     """
     取消指定方向、指定类型的 TP/SL
@@ -117,8 +120,6 @@ def _cancel_tp_sl(symbol, position_side, cancel_sl=True, cancel_tp=True):
     for o in algo_orders:
         if o.get("positionSide") == position_side and o.get("orderType") in types_to_cancel:
             cancel_algo_order(symbol=symbol, algoId=o.get("algoId"), clientAlgoId=o.get("clientAlgoId"))
-
-
 def _place_tp_sl(symbol, position_side, sl=None, tp=None):
     """
     下止损/止盈单（支持条件单）

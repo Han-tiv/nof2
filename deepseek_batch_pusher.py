@@ -254,7 +254,9 @@ def _format_dataset(dataset, preloaded):
                 append(f"ATR: {ind['ATR']:.6f}")
             if "ATR_MA20" in ind:
                 append(f"ATR 20周期均值: {ind['ATR_MA20']:.6f}")
-
+            if "ATR_RATIO" in ind:
+                append(f"ATR比率: {ind['ATR_RATIO']:.6f}")
+    
             last_buy  = float(last["TakerBuyVolume"])
             last_sell = float(last["TakerSellVolume"])
             last_vol  = float(last["Volume"])
