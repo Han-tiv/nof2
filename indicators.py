@@ -5,27 +5,41 @@ from database import redis_client
 from deepseek_batch_pusher import add_to_batch
 from config import timeframes
 from datetime import datetime, timezone
+from decimal import Decimal, getcontext
+
+# 提高累加精度
+getcontext().prec = 20
 
 # ==========================================================
 # 🔥 CVD 系列指标计算
 # ==========================================================
 def compute_cvd_indicators(rows):
+    """
+    计算 CVD 系列指标，保证跨服务器结果一致
+    输入:
+        rows: K 线列表，每项包含 TakerBuyVolume 和 TakerSellVolume
+    输出:
+        dict: 包含 CVD, CVD_MOM, CVD_NORM, CVD_DIVERGENCE, CVD_PEAKFLIP
+    """
     cvd = []
-    cumulative = 0
-    closes = [float(k["Close"]) for k in rows]
+    cumulative = Decimal(0)
+    closes = [Decimal(str(k["Close"])) for k in rows]
 
     for k in rows:
-        buy = float(k.get("TakerBuyVolume", 0))
-        sell = float(k.get("TakerSellVolume", 0))
+        buy = Decimal(str(k.get("TakerBuyVolume", 0)))
+        sell = Decimal(str(k.get("TakerSellVolume", 0)))
         cumulative += buy - sell
         cvd.append(cumulative)
 
+    # 累积值
     CVD = cvd[-1]
-    CVD_MOM = CVD - cvd[-6] if len(cvd) > 6 else 0
+    CVD_MOM = CVD - cvd[-6] if len(cvd) > 6 else Decimal(0)
 
+    # 归一化
     mn, mx = min(cvd), max(cvd)
-    CVD_NORM = (CVD - mn) / (mx - mn) if mx > mn else 0.5
+    CVD_NORM = (CVD - mn) / (mx - mn) if mx > mn else Decimal('0.5')
 
+    # 分析背离
     price_now = closes[-1]
     price_prev = closes[-6] if len(closes) > 6 else closes[0]
     cvd_prev = cvd[-6] if len(cvd) > 6 else cvd[0]
@@ -37,6 +51,7 @@ def compute_cvd_indicators(rows):
     else:
         CVD_DIV = "neutral"
 
+    # 峰值翻转
     if len(cvd) > 3:
         if cvd[-1] < cvd[-2] and cvd[-2] > cvd[-3]:
             CVD_PEAKFLIP = "top"
@@ -48,9 +63,9 @@ def compute_cvd_indicators(rows):
         CVD_PEAKFLIP = "none"
 
     return {
-        "CVD": float(CVD),
-        "CVD_MOM": float(CVD_MOM),
-        "CVD_NORM": float(round(CVD_NORM, 6)),
+        "CVD": round(float(CVD), 2),
+        "CVD_MOM": round(float(CVD_MOM), 2),
+        "CVD_NORM": round(float(CVD_NORM), 6),
         "CVD_DIVERGENCE": CVD_DIV,
         "CVD_PEAKFLIP": CVD_PEAKFLIP,
     }
