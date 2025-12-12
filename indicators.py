@@ -90,14 +90,24 @@ def calculate_signal(symbol, interval):
     closes = np.array([float(k["Close"]) for k in rows], dtype=np.float64)
     highs = np.array([float(k["High"]) for k in rows], dtype=np.float64)
     lows = np.array([float(k["Low"]) for k in rows], dtype=np.float64)
-    atr = talib.ATR(highs, lows, closes, timeperiod=14)[-1]
+    # 🔥 ATR（14周期）
+    atr_series = talib.ATR(highs, lows, closes, timeperiod=14)
+    atr_current = atr_series[-1]
+
+    # 🔥 ATR 过去 20 周期均值
+    if len(atr_series) >= 20:
+        atr_ma20 = np.nanmean(atr_series[-20:])
+    else:
+        atr_ma20 = np.nanmean(atr_series)
 
     # 🔥 CVD 系列指标
     cvd_pack = compute_cvd_indicators(rows)
 
+    # 汇总指标
     indicators = {
         **cvd_pack,
-        "ATR": float(atr),
+        "ATR": float(atr_current),
+        "ATR_MA20": float(atr_ma20),
     }
 
     # 仅投喂最近 10 根 K 线

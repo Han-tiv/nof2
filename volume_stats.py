@@ -223,9 +223,7 @@ def calc_smart_sentiment(symbol, interval):
         funding = get_funding_rate(symbol)
 
         # ===== Adaptive lookback (N bars) ===== #
-        lookback_map = {
-            "5m": 20, "15m": 12, "1h": 5, "4h": 3, "1d": 2
-        }
+        lookback_map = {"5m": 20, "15m": 12, "1h": 5, "4h": 3, "1d": 2}
         N = lookback_map.get(interval, 3)
 
         # ===== Fetch top/global ratios with lookback ===== #
@@ -239,21 +237,21 @@ def calc_smart_sentiment(symbol, interval):
         global_val = sum([x["ratio"] for x in global_acc]) / len(global_acc) if global_acc else None
         vol_ratio = volume["ratio"] if volume else 1.0
 
-        # —— OI NORMALIZED —— #
+        # ===== OI NORMALIZED ===== #
         oi_hist = get_oi_history(symbol, "1h", limit=10)
         if oi_hist:
             oi_values = [x["openInterest"] for x in oi_hist]
             min_oi = min(oi_values)
             max_oi = max(oi_values)
-            if max_oi > min_oi:
-                oi_score = normalize(cur_oi, min_oi, max_oi)
+            if max_oi == min_oi:
+                oi_score = 0.5
             else:
-                oi_score = 0
+                oi_score = normalize(cur_oi, min_oi, max_oi)
         else:
-            oi_score = 0
-    
+            oi_score = 0.5
+
         # ===== Normalized scores ===== #
-        funding_score = normalize(abs(funding), 0, 0.02) if funding else 0
+        funding_score = normalize(funding, -0.02, 0.02) if funding is not None else 0  # 保留方向
         big_player_score = normalize(top_pos_val, 0.9, 2.0) if top_pos_val else 0
         big_account_score = normalize(top_acc_val, 0.9, 2.0) if top_acc_val else 0
         crowd_inverse_score = normalize_inverse(global_val, 0.8, 1.2) if global_val else 0

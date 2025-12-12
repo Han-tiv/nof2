@@ -251,7 +251,9 @@ def _format_dataset(dataset, preloaded):
 
             append("\n📌 波动率指标:")
             if "ATR" in ind:
-                append(f"ATR: {ind['ATR']}")
+                append(f"ATR: {ind['ATR']:.6f}")
+            if "ATR_MA20" in ind:
+                append(f"ATR 20周期均值: {ind['ATR_MA20']:.6f}")
 
             last_buy  = float(last["TakerBuyVolume"])
             last_sell = float(last["TakerSellVolume"])
