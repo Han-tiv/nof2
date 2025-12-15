@@ -9,6 +9,14 @@ DEEPSEEK_MODEL = "deepseek-chat"
 # DEEPSEEK_MODEL = "deepseek-reasoner"
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
+# Gemini 配置
+GEMINI_API_KEY = "1111111111"
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_PROJECT = "1111111111"
+
+# 投喂选择
+AI_PROVIDER = "deepseek"  # 可选: "deepseek" / "gemini"
+
 # ===== 静态主流币（始终监控） =====
 mainstream_symbols = ['ETHUSDT', 'SOLUSDT']
 
@@ -36,3 +44,12 @@ OI_BASE_URL = "https://fapi.binance.com"
 # ===== 扫描市场范围 =====
 OI_USE_WHITELIST = False       # False → 扫全市场并发现新币
 OI_WHITELIST = altcoins_symbols  # 用于 True 时扫描固定列表
+
+#定义「周期 → EMA 参数映射」
+EMA_CONFIG = {
+    "5m":  [9, 21, 55],
+    "15m": [9, 21, 55],
+    "1h":  [21, 55, 100],
+    "4h":  [21, 55, 200],
+    "1d":  [20, 50, 200],
+}

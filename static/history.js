@@ -1,7 +1,9 @@
 async function loadData() {
-    let type = document.getElementById("type").value;
-    let limit = document.getElementById("limit").value;
-    let url = (type === "latest") ? `/latest?limit=${limit}` : `/${type}?limit=${limit}`;
+    const type = document.getElementById("type").value;
+    const limit = document.getElementById("limit").value;
+    const url = (type === "latest")
+        ? `/latest?limit=${limit}`
+        : `/${type}?limit=${limit}`;
 
     try {
         const res = await fetch(window.location.origin + url);
@@ -9,55 +11,92 @@ async function loadData() {
         const report = document.getElementById("report");
         report.innerHTML = "";
 
-        // ===================== requests 模式 =====================
+        // ========= requests =========
         if (type === "requests") {
             const list = data.data || [];
-            if (list.length === 0) {
+            if (!list.length) {
                 report.innerHTML = `<div class="card"><b>无 Request 数据</b></div>`;
                 return;
             }
+
             list.forEach(item => {
-                const ts = new Date(item.timestamp).toLocaleString();
+                const ts = new Date(item.timestamp * 1000).toLocaleString();
                 report.innerHTML += `
                     <div class="card">
                         <div class="title">📌 Request 投喂内容</div>
                         <div class="time">时间：${ts}</div>
-                        <div class="section"><pre>${item.request}</pre></div>
+                        <div class="section">
+                            <pre>${item.request}</pre>
+                        </div>
                     </div>
                 `;
             });
             return;
         }
 
-        // ===================== responses 模式 =====================
+        // ========= responses =========
         if (type === "responses") {
             const list = data.data || [];
-            if (list.length === 0) {
+            if (!list.length) {
                 report.innerHTML = `<div class="card"><b>无 Response 数据</b></div>`;
                 return;
             }
-            list.forEach(resItem => renderResponseCard(null, resItem));
-            bindButtons();
+
+            list.forEach(item => {
+                const ts = new Date(item.timestamp * 1000).toLocaleString();
+                const pretty = JSON.stringify(item.signals, null, 2);
+                report.innerHTML += `
+                    <div class="card">
+                        <div class="title">🚨 AI 最终交易信号</div>
+                        <div class="time">时间：${ts}</div>
+                        <div class="section">
+                            <pre class="json">${syntaxHighlight(pretty)}</pre>
+                        </div>
+                    </div>
+                `;
+            });
             return;
         }
 
-        // ===================== latest 模式（多条 Request + Response） =====================
+        // ========= latest =========
         if (type === "latest") {
             const reqs = data.request || [];
             const ress = data.response || [];
 
-            if (reqs.length === 0 || ress.length === 0) {
+            if (!reqs.length || !ress.length) {
                 report.innerHTML = `<div class="card"><b>无最新记录</b></div>`;
                 return;
             }
 
-            for (let i = 0; i < ress.length; i++) {
-                const req = reqs[i] || null;
-                const resItem = ress[i];
-                renderResponseCard(req, resItem);
+            for (let i = 0; i < Math.min(reqs.length, ress.length); i++) {
+                const r = reqs[i];
+                const s = ress[i];
+                const ts = new Date(s.timestamp * 1000).toLocaleString();
+                const pretty = JSON.stringify(s.signals, null, 2);
+
+                report.innerHTML += `
+                    <div class="card">
+                        <div class="title">🧠 DeepSeek 决策</div>
+                        <div class="time">时间：${ts}</div>
+
+                        <div class="section collapsible">
+                            <button class="toggle">📌 展开/折叠投喂内容</button>
+                            <div class="content" style="display:none;">
+                                <pre>${r.request}</pre>
+                            </div>
+                        </div>
+
+                        <div class="section collapsible">
+                            <button class="toggle">🚨 展开/折叠交易信号</button>
+                            <button class="copy" data-json="${encodeURIComponent(pretty)}">📋 复制 JSON</button>
+                            <div class="content">
+                                <pre class="json">${syntaxHighlight(pretty)}</pre>
+                            </div>
+                        </div>
+                    </div>
+                `;
             }
             bindButtons();
-            return;
         }
 
     } catch (err) {

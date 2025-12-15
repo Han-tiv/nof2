@@ -7,23 +7,28 @@ from indicators import calculate_signal
 from config import monitor_symbols, timeframes
 import asyncio
 from scheduler import schedule_loop_async
-from deepseek_batch_pusher import _is_ready_for_push, push_batch_to_deepseek
+from deepseek_batch_pusher import _is_ready_for_push, push_batch_to_deepseek, close_global_session
+from ai500 import update_oi_symbols
+from oi import scheduler
 import subprocess
 import signal
 import os
 
 async def run_async():
-    await schedule_loop_async()
+    # 并行启动多个异步任务
+    await asyncio.gather(
+        scheduler(),           # OI 异动扫描
+        schedule_loop_async()  # 原来的调度循环
+    )
 
 def main():
     clear_redis()
     threading.Thread(target=message_worker, daemon=True).start()
 
-    # fetch_all()
+    # ===== 启动 ai500 2分钟定时任务 =====
+    print("⏳ 启动 OI 监控定时任务 (2分钟一次, 跳过整5分钟节点)")
+    update_oi_symbols()  # 初次调用，内部会自循环
 
-    oi_proc = subprocess.Popen(["python3", "oi.py"])   # ⬅ 保存句柄
-    print("📡 OI 异动监控模块已启动")
-    
     print("⏳ 启动异步调度循环")
     try:
         asyncio.run(run_async())
@@ -32,12 +37,12 @@ def main():
         print("\n⚠ 捕获 Ctrl+C → 准备退出...")
 
     finally:
-        # 🔥 优雅关闭子进程 OI 监控模块
+        # 关闭 DeepSeek 全局 session
         try:
-            oi_proc.terminate()
-            print("🛑 已终止 OI 监控模块")
-        except:
-            pass
+            asyncio.run(close_global_session())
+            print("✅ DeepSeek 全局 session 已关闭")
+        except Exception as e:
+            print(f"❌ 关闭 DeepSeek session 失败: {e}")
 
         print("👋 程序已退出")
         

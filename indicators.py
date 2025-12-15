@@ -3,12 +3,12 @@ import numpy as np
 import talib
 from database import redis_client
 from deepseek_batch_pusher import add_to_batch
-from config import timeframes
+from config import timeframes, EMA_CONFIG
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext
 
 # 提高累加精度
-getcontext().prec = 20
+getcontext().prec = 30
 
 # ==========================================================
 # 🔥 CVD 系列指标计算
@@ -22,18 +22,18 @@ def compute_cvd_indicators(rows):
         dict: 包含 CVD, CVD_MOM, CVD_NORM, CVD_DIVERGENCE, CVD_PEAKFLIP
     """
     cvd = []
-    cumulative = Decimal(0)
+    cumulative = Decimal('0')
     closes = [Decimal(str(k["Close"])) for k in rows]
 
     for k in rows:
-        buy = Decimal(str(k.get("TakerBuyVolume", 0)))
-        sell = Decimal(str(k.get("TakerSellVolume", 0)))
+        buy = Decimal(str(k.get("TakerBuyVolume", '0')))
+        sell = Decimal(str(k.get("TakerSellVolume", '0')))
         cumulative += buy - sell
         cvd.append(cumulative)
 
     # 累积值
     CVD = cvd[-1]
-    CVD_MOM = CVD - cvd[-6] if len(cvd) > 6 else Decimal(0)
+    CVD_MOM = CVD - cvd[-6] if len(cvd) > 6 else Decimal('0')
 
     # 归一化
     mn, mx = min(cvd), max(cvd)
@@ -62,10 +62,11 @@ def compute_cvd_indicators(rows):
     else:
         CVD_PEAKFLIP = "none"
 
+    # 保留固定小数位输出，避免 float 转换引入误差
     return {
-        "CVD": round(float(CVD), 2),
-        "CVD_MOM": round(float(CVD_MOM), 2),
-        "CVD_NORM": round(float(CVD_NORM), 6),
+        "CVD": CVD.quantize(Decimal('0.01')),
+        "CVD_MOM": CVD_MOM.quantize(Decimal('0.01')),
+        "CVD_NORM": CVD_NORM.quantize(Decimal('0.000001')),
         "CVD_DIVERGENCE": CVD_DIV,
         "CVD_PEAKFLIP": CVD_PEAKFLIP,
     }
@@ -90,26 +91,67 @@ def calculate_signal(symbol, interval):
     closes = np.array([float(k["Close"]) for k in rows], dtype=np.float64)
     highs = np.array([float(k["High"]) for k in rows], dtype=np.float64)
     lows = np.array([float(k["Low"]) for k in rows], dtype=np.float64)
+    # ==========================================================
+    # 🔥 EMA（按周期动态参数）
+    # ==========================================================
+    ema_periods = EMA_CONFIG.get(interval, [])
+    ema_values = {}
+    for p in ema_periods:
+        ema_series = talib.EMA(closes, timeperiod=p)
+        ema_values[f"EMA_{p}"] = float(ema_series[-1])
+        
+    ema_trend = "unknown"
+    ema_strength = None
+
+    if len(ema_periods) >= 2:
+        fast_p = min(ema_periods)
+        slow_p = max(ema_periods)
+
+        ema_fast = ema_values.get(f"EMA_{fast_p}")
+        ema_slow = ema_values.get(f"EMA_{slow_p}")
+
+        if ema_fast and ema_slow:
+            diff = abs(ema_fast - ema_slow) / ema_slow
+
+            if diff < 0.001:
+                ema_trend = "flat"
+            elif ema_fast > ema_slow:
+                ema_trend = "bull"
+            else:
+                ema_trend = "bear"
+
+            ema_strength = round(diff, 6)
+        
     # 🔥 ATR（14周期）
     atr_series = talib.ATR(highs, lows, closes, timeperiod=14)
     atr_current = atr_series[-1]
 
-    # 🔥 ATR 过去 20 周期均值
-    if len(atr_series) >= 20:
-        atr_ma20 = np.nanmean(atr_series[-20:])
+    # 🔥 ATR MA20（数据不足则跳过）
+    atr_valid = atr_series[np.isfinite(atr_series)]
+
+    if atr_valid.size >= 20:
+        atr_ma20 = np.nanmean(atr_valid[-20:])
+    elif atr_valid.size > 0:
+        atr_ma20 = np.nanmean(atr_valid)
     else:
-        atr_ma20 = np.nanmean(atr_series)
+        atr_ma20 = None
 
     # 🔥 CVD 系列指标
     cvd_pack = compute_cvd_indicators(rows)
-    atr_ratio = float(atr_current) / float(atr_ma20) if atr_ma20 > 0 else 1.0
+    if atr_ma20 and atr_current and atr_ma20 > 0:
+        atr_ratio = round(float(atr_current) / float(atr_ma20), 6)
+    else:
+        atr_ratio = None
 
     # 汇总指标
     indicators = {
         **cvd_pack,
-        "ATR": float(atr_current),
-        "ATR_MA20": float(atr_ma20),
-        "ATR_RATIO": round(atr_ratio, 6),  # 新增
+        **ema_values,
+        "EMA_TREND": ema_trend,
+        "EMA_TREND_STRENGTH": ema_strength,
+        "ATR": float(atr_current) if np.isfinite(atr_current) else None,
+        "ATR_MA20": float(atr_ma20) if atr_ma20 is not None else None,
+        "ATR_RATIO": atr_ratio,
     }
 
     # 仅投喂最近 10 根 K 线

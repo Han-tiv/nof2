@@ -8,18 +8,18 @@ from ai_trade_notifier import send_tg_trade_signal
 from position_cache import position_records
 from account_positions import get_account_status
 from database import redis_client
-from trader import execute_trade
+from trader import execute_trade_async  # 异步下单版本
+import time
 
 tf_order = ["1d", "4h", "1h", "15m", "5m"]
 last_trigger = {tf: None for tf in tf_order}
 
 async def schedule_loop_async():
-    print("⏳ 启动最简调度循环（周期触发 → 下载K线 → 投喂AI + 自动交易）")
+    print("⏳ 启动最简调度循环（周期触发 → 下载K线 → 投喂AI + 并行下单）")
 
     while True:
         now = datetime.now(timezone.utc)
-        m = now.minute
-        h = now.hour
+        m, h = now.minute, now.hour
         current_key = None
 
         if h == 0 and m == 0:
@@ -41,18 +41,20 @@ async def schedule_loop_async():
                 # 🔄 刷新持仓缓存
                 get_account_status()
 
-                # 🔥 合成监控池 = 主流币 + 持仓币 + OI异动币
+                # 🔥 合成监控池 = 主流币 + 持仓币 + OI异动币 + ai500
                 raw_oi = redis_client.smembers("OI_SYMBOLS") or set()
                 oi_symbols = list(raw_oi)
+                ai500_symbols = redis_client.lrange("AI500_SYMBOLS", 0, -1)
                 pos_symbols = list(position_records)
 
                 monitor_symbols[:] = list(
-                    dict.fromkeys(mainstream_symbols + pos_symbols + oi_symbols)
+                    dict.fromkeys(mainstream_symbols + pos_symbols + oi_symbols + ai500_symbols)
+                    # dict.fromkeys(mainstream_symbols + pos_symbols)
                 )
 
                 print(f"🔍 监控池: {monitor_symbols} (共 {len(monitor_symbols)} 个币)")
 
-                # await asyncio.sleep(2) #等待2秒
+                # 下载 K 线
                 fetch_all()
 
                 print("📌 所有 K 线下载完成 → 计算指标")
@@ -60,8 +62,12 @@ async def schedule_loop_async():
                     calculate_signal_single(sym)
 
                 try:
+                    # 1️⃣ AI 投喂
+                    start_ai = time.perf_counter()
                     ai_res = await push_batch_to_deepseek()
-                    # print("🔥 DeepSeek 解析后返回:", ai_res)
+                    # print("🔥 AI 原始返回:", ai_res)
+                    end_ai = time.perf_counter()
+                    print(f"⏱ AI返回耗时: {round(end_ai - start_ai, 3)} 秒")
 
                     if ai_res and isinstance(ai_res, list):
 
@@ -71,42 +77,44 @@ async def schedule_loop_async():
                             "reverse",
                             "stop_loss", "take_profit",
                             "update_stop_loss", "update_take_profit",
-                            "increase_position", "decrease_position"  # ← 新增的
+                            "increase_position", "decrease_position"
                         }
-                        exec_list = []     # 最终需要执行的信号
 
-                        for sig in ai_res:
-                            # print("🔹 AI 信号:", sig)
-                            symbol = sig.get("symbol")
-                            action = sig.get("action")
+                        # 只保留有效信号
+                        exec_list = [sig for sig in ai_res if sig.get("action") in valid_actions]
 
-                            if not symbol or not action:
-                                continue
-
-                            # ---- 止盈止损 ----
-                            sl = sig.get("stop_loss")
-                            tp = sig.get("take_profit")
-
-                            # AI 有可能返回：position_size、quantity、qty
-                            position_size = sig.get("position_size") or sig.get("order_value") or sig.get("amount")
-
-                            # ---- 仅执行允许的操作 ----
-                            if action in valid_actions:
-                                execute_trade(
-                                    symbol=symbol,
-                                    action=action,
-                                    stop_loss=sl,
-                                    take_profit=tp,
-                                    position_size=position_size
+                        # 2️⃣ 并发下单
+                        tasks = [
+                            asyncio.create_task(
+                                execute_trade_async(
+                                    symbol=sig.get("symbol"),
+                                    action=sig.get("action"),
+                                    stop_loss=sig.get("stop_loss"),
+                                    take_profit=sig.get("take_profit"),
+                                    position_size=sig.get("position_size") or sig.get("order_value") or sig.get("amount"),
+                                    quantity=sig.get("quantity")
                                 )
-                                exec_list.append(sig)
+                            )
+                            for sig in exec_list
+                        ]
 
-                        # 如果真的有执行动作 → 推送 & 日志
+                        start_exec = time.perf_counter()
+                        if tasks:
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                        end_exec = time.perf_counter()
+                        print(f"⏱ 并行下单耗时: {round(end_exec - start_exec, 3)} 秒")
+
+                        # 3️⃣ 异步 TG 推送
                         if exec_list:
-                            await send_tg_trade_signal(exec_list)
-                            print(f"🟢 执行交易: {exec_list}")
-                        # 如果没有要执行的动作 → 保持安静，不打印任何多余内容
-
+                            start_tg = time.perf_counter()
+                            if asyncio.iscoroutinefunction(send_tg_trade_signal):
+                                await send_tg_trade_signal(exec_list)
+                            else:
+                                # 同步函数使用线程池
+                                await asyncio.to_thread(send_tg_trade_signal, exec_list)
+                            end_tg = time.perf_counter()
+                            print(f"🟢 执行交易 & 推送TG完成: {exec_list}")
+                            print(f"⏱ TG推送耗时: {round(end_tg - start_tg, 3)} 秒")
                     else:
                         print("⚠ AI 未返回有效信号，不推送，不下单")
 

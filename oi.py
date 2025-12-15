@@ -113,9 +113,9 @@ async def run_scan():
         print("--------------------------------------------------------------\n")
 
 async def scheduler():
+    """
+    主调度循环，每 OI_INTERVAL_MINUTES 对齐周期扫描
+    """
     while True:
         await wait_for_next_period()
         await run_scan()
-
-if __name__ == "__main__":
-    asyncio.run(scheduler())

@@ -12,15 +12,26 @@ KEY_RES = "deepseek_analysis_response_history"
 app = FastAPI(title="DeepSeek Analysis History API")
 
 def _read_list(key: str, limit: int):
-    items = redis_client.lrange(key, 0, limit - 1)
+    # 从 Redis 获取最新 limit 条（最右侧为最新）
+    items = redis_client.lrange(key, -limit, -1)
     result = []
+
+    # 反转顺序，最新在前
+    items = list(reversed(items))
+
     for item in items:
         try:
-            result.append(json.loads(item))
+            obj = json.loads(item)
         except Exception:
-            result.append({"raw": item})
-    return result
+            continue
 
+        # 🔥 新结构：如果是 list，自动展开
+        if isinstance(obj, list):
+            result.extend(obj)
+        else:
+            result.append(obj)
+
+    return result
 
 @app.get("/requests")
 async def get_requests(limit: Optional[int] = Query(50, ge=1, le=500)):
