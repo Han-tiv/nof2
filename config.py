@@ -5,8 +5,8 @@ TELEGRAM_BOT_TOKEN = "1111111111" #tg token
 TELEGRAM_CHAT_ID = "-111111111111" #tg 频道
 
 DEEPSEEK_API_KEY = "sk-111111111111"  # deepseek key
-DEEPSEEK_MODEL = "deepseek-chat"
-# DEEPSEEK_MODEL = "deepseek-reasoner"
+# DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = "deepseek-reasoner"
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
 # Gemini 配置
@@ -53,3 +53,4 @@ EMA_CONFIG = {
     "4h":  [21, 55, 200],
     "1d":  [20, 50, 200],
 }
+
