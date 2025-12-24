@@ -1,5 +1,7 @@
 https://t.me/aibtcchina
 
+<img width="602" height="689" alt="image" src="https://github.com/user-attachments/assets/eb6bbc44-4fe6-456e-856c-71804cc08ee6" />
+
 更新于:2025/12/13
 
 提示词较为严格,可自行调整改动,欢迎魔改.
