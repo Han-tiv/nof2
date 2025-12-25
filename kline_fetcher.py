@@ -3,10 +3,10 @@ import json
 import logging
 import requests
 from concurrent.futures import ThreadPoolExecutor
-from config import monitor_symbols, timeframes
+from config import monitor_symbols, timeframes, KLINE_LIMITS
 from database import redis_client
 
-def fetch_historical(symbol, interval, limit=301):
+def fetch_historical(symbol, interval, limit):
     url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     rkey = f"historical_data:{symbol}:{interval}"
 
@@ -46,11 +46,11 @@ def fetch_all():
     with ThreadPoolExecutor(max_workers=8) as exe:
         for s in monitor_symbols:
             for tf in timeframes:
-                exe.submit(fetch_historical, s, tf)
+                limit = KLINE_LIMITS.get(tf, 301)  # 兜底默认
+                exe.submit(fetch_historical, s, tf, limit)
 
     elapsed = time.time() - start_time
     avg = elapsed / total_requests
 
     print(f"📌 历史数据初始化完成 ✓")
     print(f"⏱ 总耗时: {elapsed:.2f} 秒 (平均单请求: {avg:.3f} 秒)")
-

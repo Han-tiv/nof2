@@ -4,8 +4,6 @@ TF_WEIGHTS = {
     "1d": 30,
     "4h": 25,
     "1h": 20,
-    "15m": 15,
-    "5m": 10,
 }
 
 def calculate_trend_alignment(cycles: dict):

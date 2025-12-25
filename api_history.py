@@ -1,8 +1,9 @@
+import os
+import json
+import uvicorn
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 from typing import Optional
-import json
-import uvicorn
 from database import redis_client
 from fastapi.staticfiles import StaticFiles
 
@@ -33,19 +34,12 @@ def _read_list(key: str, limit: int):
 
     return result
 
-@app.get("/requests")
-async def get_requests(limit: Optional[int] = Query(50, ge=1, le=500)):
-    return {"count": limit, "data": _read_list(KEY_REQ, limit)}
-
-
-@app.get("/responses")
-async def get_responses(limit: Optional[int] = Query(50, ge=1, le=500)):
-    return {"count": limit, "data": _read_list(KEY_RES, limit)}
-
 @app.get("/latest")
 async def get_latest_pair(limit: int = Query(1, ge=1, le=300)):
-    reqs = redis_client.lrange(KEY_REQ, 0, limit - 1)
-    ress = redis_client.lrange(KEY_RES, 0, limit - 1)
+    reqs = redis_client.lrange(KEY_REQ, -limit, -1)
+    ress = redis_client.lrange(KEY_RES, -limit, -1)
+    reqs = list(reversed(reqs))
+    ress = list(reversed(ress))
 
     def safe(x):
         if not x:
@@ -67,7 +61,8 @@ html_page = """
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>DeepSeek Analysis History</title>
+<title>AIBTC.VIP</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
 body {
     background: #0b0c10;
@@ -166,6 +161,10 @@ pre.json .null { color: #ff6363; }
 /* 顶部区域选择框美化 */
 .controls {
     margin-bottom: 18px;
+    display: flex;
+    justify-content: flex-end; /* 🔥 推到最右 */
+    align-items: center;
+    gap: 8px;
 }
 
 .controls select, .controls input {
@@ -204,48 +203,163 @@ pre.json .null { color: #ff6363; }
 ::-webkit-scrollbar-thumb:hover {
     background: #495168;
 }
-</style>
 
+/* ===================== 新增：双栏布局 ===================== */
+.layout {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr; /* 左边收益曲线更宽，右边日志更窄 */
+    gap: 18px;
+    align-items: start;
+}
+
+.panel {
+    min-width: 0;            /* 防止 grid 子项溢出导致横向滚动 */
+    display: flex;           /* ✅ 关键：让 panel 变成 flex 容器 */
+    flex-direction: column;  /* ✅ 关键：从上往下堆叠，顶部对齐 */
+}
+
+/* 小屏自动改成上下布局 */
+@media (max-width: 1100px) {
+    .layout {
+        grid-template-columns: 1fr;
+    }
+    #profit_chart {
+        height: 420px !important;
+    }
+}
+
+/* 次数统计 */
+.stats-grid{
+    display: grid;
+    grid-template-columns: repeat(2, 1fr); /* 右侧窄，用 2 列更合适 */
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.stat-card{
+    background: #111319;
+    border: 1px solid #1d2330;
+    border-radius: 10px;
+    padding: 12px 14px;
+    box-shadow: 0 0 18px rgba(0, 0, 0, 0.35);
+}
+
+.stat-card .k{
+    font-size: 13px;
+    color: #b5b5b5;
+    margin-bottom: 6px;
+}
+
+.stat-card .v{
+    font-size: 20px;
+    font-weight: 800;
+    color: #ff5252; /* 你红框是红色感受，这里用红 */
+    letter-spacing: 0.5px;
+}
+
+@media (max-width: 1100px){
+  #stats_wrap .stats-grid-4{
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+</style>
 </head>
 <body>
 
 <div class="controls">
-    <label>类型：</label>
-    <select id="type">
-        <option value="responses">响应</option>
-        <option value="requests">请求</option>
-        <option value="latest">最新一次(Request+Response)</option>
-    </select>
-
-    <label style="margin-left:10px;">条数：</label>
-    <input id="limit" type="number" value="20" min="1" max="300" style="width:60px;">
+    <label>AI 决策条数：</label>
+    <input id="limit" type="number" value="1" min="1" max="300" style="width:60px;">
     <button onclick="loadData()">刷新</button>
 </div>
 
-<!-- 🔥 页面核心展示区域 -->
-<div id="report"></div>
+<!-- 🔥 页面核心展示区域：左收益曲线 + 右最新请求 -->
+<div class="layout">
+    <!-- 左：收益曲线 -->
+    <div class="panel left">
+      <div class="card">
+        <div class="title">账户收益曲线</div>
+        <div class="time" id="profit_meta"></div>
+        <div id="profit_chart" style="height:520px;"></div>
+      </div>
+
+      <!-- ✅ 统计放左侧最下面 -->
+      <div id="stats_wrap"></div>
+    </div>
+
+    <!-- 右：最新一次 Request + Response -->
+    <div class="panel right">
+        <!-- 这里交给 history.js 渲染 -->
+        <div id="latest_wrap"></div>
+    </div>
+</div>
 
 <script src="/static/history.js"></script>
 <script>
     window.onload = () => loadData();
 </script>
 </body>
-
 </html>
 """
 
+@app.get("/stats")
+async def get_stats():
+    try:
+        total_decisions = redis_client.llen(KEY_RES)
+    except Exception:
+        total_decisions = 0
+
+    return {
+        "total_decisions": total_decisions
+    }
+    
 @app.get("/", response_class=HTMLResponse)
 async def history_page():
     return HTMLResponse(html_page)
 # --------------------------------------------------
 
+@app.get("/profit_curve")
+async def get_profit_curve():
+    raw_curve = redis_client.hget("profit:ultra_simple", "curve")
+    raw_initial = redis_client.hget("profit:ultra_simple", "initial_equity")
+
+    if not raw_curve:
+        return {
+            "count": 0,
+            "initial_equity": None,
+            "data": []
+        }
+
+    try:
+        curve = json.loads(raw_curve)
+    except Exception:
+        curve = []
+
+    try:
+        initial_equity = float(raw_initial) if raw_initial else None
+    except Exception:
+        initial_equity = None
+
+    return {
+        "count": len(curve),
+        "initial_equity": initial_equity,
+        "data": curve
+    }
 
 if __name__ == "__main__":
-    import os
     filename = os.path.basename(__file__).replace(".py", "")
     uvicorn.run(
         f"{filename}:app",
         host="0.0.0.0",
         port=8600,
         reload=True
+    )
+
+def run_api_server():
+    uvicorn.run(
+        "api_history:app",
+        host="0.0.0.0",
+        port=8600,
+        reload=False,
+        access_log=False,   # ✅ 关闭访问日志
+        log_level="warning" # ✅ 可选：减少其它INFO
     )

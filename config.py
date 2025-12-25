@@ -1,56 +1,61 @@
-BINANCE_API_KEY = "111111111111111" #币安私钥
-BINANCE_API_SECRET = "1111111111111" #币安公钥
+from market_structure import MarketStructure
 
-TELEGRAM_BOT_TOKEN = "1111111111" #tg token
-TELEGRAM_CHAT_ID = "-111111111111" #tg 频道
+#币安账号API
+BINANCE_API_KEY = "111111111111111"
+BINANCE_API_SECRET = "1111111111111111"
 
-DEEPSEEK_API_KEY = "sk-111111111111"  # deepseek key
-# DEEPSEEK_MODEL = "deepseek-chat"
-DEEPSEEK_MODEL = "deepseek-reasoner"
-DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
+#TG配置
+TELEGRAM_BOT_TOKEN = "11111111111111"
+TELEGRAM_CHAT_ID = "-11111111111"
 
-# Gemini 配置
-GEMINI_API_KEY = "1111111111"
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_PROJECT = "1111111111"
+#AIBTC.VIP大模型配置
+CLAUDE_API_KEY = "1111111111111111"  #模型key
+CLAUDE_MODEL = "claude-opus-4-5-20251101"  #模型名称
+CLAUDE_URL = "https://api.aibtc.vip/v1/chat/completions"
 
-# 投喂选择
-AI_PROVIDER = "deepseek"  # 可选: "deepseek" / "gemini"
+AI_PROVIDER = "claude"  # 这里不能改
 
-# ===== 静态主流币（始终监控） =====
-mainstream_symbols = ['ETHUSDT', 'SOLUSDT']
+# ===== 固定币种监控池 =====
+monitor_symbols = ['ETHUSDT', 'SOLUSDT']
+# monitor_symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']
+# monitor_symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'HYPEUSDT']
 
-# ===== OI 动态池（OI 扫描自动写入，不要手动填写） =====
-altcoins_symbols = []          # ← OI 发现新币时自动 append
+OI_BASE_URL = "https://fapi.binance.com"
 
-# ===== 监控池（深度分析用） =====
-monitor_symbols = mainstream_symbols + altcoins_symbols
-
-# ===== 周期 =====
-timeframes = ["5m", "15m", "1h", "4h", "1d"]
+# ===== 多周期 =====
+timeframes = ["4h", "1h", "15m"]
 
 # ===== Redis =====
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 REDIS_DB = 10
 
-# ===== OI 异动扫描配置 =====
-OI_THRESHOLD = 5               # 达到 ±5% 波动才算异动
-OI_INTERVAL_MINUTES = 5        # 扫描周期（5分钟）
-OI_CONCURRENCY = 20            # 并发请求
-OI_EXPIRE_MINUTES = 30         # OI 不再异常 → 自动移除
-OI_BASE_URL = "https://fapi.binance.com"
-
-# ===== 扫描市场范围 =====
-OI_USE_WHITELIST = False       # False → 扫全市场并发现新币
-OI_WHITELIST = altcoins_symbols  # 用于 True 时扫描固定列表
 
 #定义「周期 → EMA 参数映射」
 EMA_CONFIG = {
-    "5m":  [9, 21, 55],
-    "15m": [9, 21, 55],
-    "1h":  [21, 55, 100],
-    "4h":  [21, 55, 200],
-    "1d":  [20, 50, 200],
+    "15m": [20, 50],
+    "1h":  [50],
 }
 
+#定义「周期 → K线数量」
+KLINE_LIMITS = {
+    "15m": 301,
+    "1h": 501,
+    "4h": 801,
+}
+
+#结构计算
+STRUCTURE_PARAMS = {
+    "15m": {"swing_size": 4, "keep_pivots": 10, "trend_vote_lookback": 3, "range_pivot_k": 3},
+    "1h":  {"swing_size": 6, "keep_pivots": 12, "trend_vote_lookback": 3, "range_pivot_k": 3},
+    "4h":  {"swing_size": 10, "keep_pivots": 14, "trend_vote_lookback": 3, "range_pivot_k": 3},
+}
+
+# 每个话题在 TG 群里的 message_thread_id
+TOPIC_MAP = {
+    "Trading-signals": 58069,      # 交易信号
+    "On-chain-monitoring": 58071,        # 链上监控
+    "Abnormal-signal": 58065,      # 交易话题
+}
+
+DEFAULT_TOPIC = None   # None = 主聊天

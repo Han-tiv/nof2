@@ -5,41 +5,32 @@ from datetime import datetime
 from database import redis_client
 
 # 配置
-INTERVAL = 120  # 每2分钟执行一次
+INTERVAL = 600  # 每10分钟执行一次
 REDIS_KEY = "AI500_SYMBOLS"
 
-EXCLUDE_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"}
-OI_ANOMALY_URL = "http://nofxaios.com:30006/api/ai500/list?auth=cm_568c67eae410d912c54c"
-OI_TOP_URL = "http://nofxaios.com:30006/api/oi/top-ranking?limit=10&duration=15m&auth=cm_568c67eae410d912c54c"
+EXCLUDE_SYMBOLS = {"BTCUSDT", "PAXGUSDT"}
+LATEST_URL = "https://token.aibtc.vip/latest"
 
-
-def _fetch_ai500_symbols():
+def _fetch_symbols():
     """
-    从接口获取最新币种列表
+    获取所有符合条件的币种列表
+    只从最新接口获取，排除 EXCLUDE_SYMBOLS
     """
     symbols_set = set()
+
+    # --- 最新接口 ---
     try:
-        # OI 异动（score>70）
-        resp = requests.get(OI_ANOMALY_URL, timeout=5)
+        resp = requests.get(LATEST_URL, timeout=5)
         coins = resp.json().get("data", {}).get("coins", [])
         for c in coins:
-            if c.get("pair") and c.get("score", 0) > 70:
-                symbols_set.add(c["pair"])
-
-        # OI Top Ranking
-        resp = requests.get(OI_TOP_URL, timeout=5)
-        positions = resp.json().get("data", {}).get("positions", [])
-        for p in positions:
-            if p.get("symbol"):
-                symbols_set.add(p["symbol"])
-
-        symbols = [s for s in symbols_set if s not in EXCLUDE_SYMBOLS]
-        return symbols
-
+            pair = c.get("pair")
+            if pair and pair not in EXCLUDE_SYMBOLS:
+                symbols_set.add(pair)
     except Exception as e:
-        print(f"❌ ai500获取失败: {e}")
-        return []
+        print(f"❌ latest获取失败: {e}")
 
+    merged_list = sorted(symbols_set)
+    return merged_list
 
 def _schedule_next():
     """
@@ -49,23 +40,23 @@ def _schedule_next():
     t.daemon = True
     t.start()
 
-
 def update_oi_symbols():
     """
-    主函数：获取 OI 异动币并更新 Redis
+    主函数：获取币种并更新 Redis
     """
     now = datetime.now()
-    # 跳过整5分钟节点
-    if now.minute % 5 == 0:
-        print(f"⏭️ {now.strftime('%H:%M')} 是整5分钟节点，跳过执行")
+
+    # ⏭️ 跳过整 1 小时节点（HH:00）
+    if now.minute == 0:
+        print(f"⏭️ {now.strftime('%H:%M')} 是整点，跳过执行")
     else:
-        symbols = _fetch_ai500_symbols()
+        symbols = _fetch_symbols()
         if symbols:
             redis_client.delete(REDIS_KEY)
             redis_client.rpush(REDIS_KEY, *symbols)
-            print(f"🔥 ai500更新Redis成功: {symbols}")
+            # print(f"🔥 更新Redis成功: {symbols}")
         else:
-            print("⚠ ai500获取为空，Redis不更新")
+            print("⚠ 获取为空，Redis不更新")
 
     # 调度下一次执行
     _schedule_next()

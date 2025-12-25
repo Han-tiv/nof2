@@ -2,63 +2,53 @@ import json
 import asyncio
 import logging
 import aiohttp
+import html
 from decimal import Decimal
 import time
 import re
 from concurrent.futures import ThreadPoolExecutor
-from config import (
-    DEEPSEEK_API_KEY, DEEPSEEK_MODEL, DEEPSEEK_URL,
-    GEMINI_API_KEY, GEMINI_MODEL, GEMINI_PROJECT,
-    AI_PROVIDER
-)
+from config import CLAUDE_API_KEY, CLAUDE_MODEL, CLAUDE_URL, AI_PROVIDER, timeframes
 from database import redis_client
-from volume_stats import (
-    calc_volume_compare, get_open_interest, get_funding_rate, get_24hr_change, calc_smart_sentiment,
-    get_oi_history, get_top_position_ratio, get_top_account_ratio, get_global_account_ratio
-)
+from volume_stats import get_open_interest, get_funding_rate, get_24hr_change
 from account_positions import account_snapshot, tp_sl_cache
 from trend_alignment import calculate_trend_alignment
-import google.genai as genai
+
+_preload_executor = ThreadPoolExecutor(max_workers=12)
 
 KEY_REQ = "deepseek_analysis_request_history"
 KEY_RES = "deepseek_analysis_response_history"
 
 batch_cache = {}
-required_intervals = ["1d", "4h", "1h", "15m", "5m"]
 
-_global_connector = None
-_global_session = None
-_global_session_lock = asyncio.Lock()
+# ================== 全局 HTTP Session（进程级） ==================
+_http_session: aiohttp.ClientSession | None = None
 
-# ================== Session 管理 ==================
-async def close_global_session():
-    global _global_session
-    async with _global_session_lock:
-        if _global_session and not _global_session.closed:
-            await _global_session.close()
-            _global_session = None
-            print("✅ 全局 aiohttp session 已关闭")
-            
-async def get_global_session():
-    global _global_session
-    async with _global_session_lock:
-        if _global_session is None or _global_session.closed:
-            _global_session = aiohttp.ClientSession(
-                connector=get_global_connector(),
-                timeout=aiohttp.ClientTimeout(total=60)
-            )
-    return _global_session
+async def init_http_session():
+    """
+    初始化全局 HTTP Session（只做一次）
+    不在 Session 级别设置 timeout，timeout 交给单次 request 控制
+    """
+    global _http_session
 
-def get_global_connector():
-    global _global_connector
-    if _global_connector is None:
-        _global_connector = aiohttp.TCPConnector(
-            limit=200,
-            limit_per_host=100,
-            ttl_dns_cache=300,
-            force_close=False
-        )
-    return _global_connector
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession()
+        print("🌐 全局 HTTP Session 已初始化")
+
+async def get_http_session() -> aiohttp.ClientSession:
+    if _http_session is None or _http_session.closed:
+        raise RuntimeError("HTTP Session 尚未初始化，请先调用 init_http_session()")
+    return _http_session
+
+async def close_http_session():
+    """
+    程序退出时调用，优雅关闭
+    """
+    global _http_session
+
+    if _http_session is not None:
+        await _http_session.close()
+        _http_session = None
+        print("🛑 全局 HTTP Session 已关闭")
 
 def json_safe_dumps(obj):
     return json.dumps(
@@ -68,10 +58,15 @@ def json_safe_dumps(obj):
     )
 
 # ================== Batch 管理 ==================
-def add_to_batch(symbol, interval, klines, indicators):
+def add_to_batch(symbol, interval, indicators=None):
     if symbol not in batch_cache:
         batch_cache[symbol] = {}
-    batch_cache[symbol][interval] = {"klines": klines, "indicators": indicators}
+
+    payload = {}
+    if indicators is not None:
+        payload["indicators"] = indicators
+
+    batch_cache[symbol][interval] = payload
 
 def _is_ready_for_push():
     """
@@ -112,7 +107,7 @@ def _read_prompt():
         with open("prompt.txt", "r", encoding="utf-8") as f:
             return f.read()
     except Exception:
-        return "你是一名专业量化策略分析引擎，请严格输出 JSON 数组或 JSON 对象形式的交易信号。"
+        return "You are a crypto short-term trend trader [multi-coin batch signal generator]. "
 
 # ================== API 预加载 ==================
 async def preload_all_api(dataset):
@@ -128,7 +123,7 @@ async def preload_all_api(dataset):
             return None
 
     loop = asyncio.get_running_loop()
-    executor = ThreadPoolExecutor(max_workers=20)
+    executor = _preload_executor
     tasks = []
 
     for symbol, cycles in dataset.items():
@@ -136,27 +131,12 @@ async def preload_all_api(dataset):
         tasks.append(loop.run_in_executor(executor, safe_call, get_24hr_change, symbol))
         tasks.append(loop.run_in_executor(executor, safe_call, get_open_interest, symbol))
 
-        for interval in cycles.keys():
-            key = f"{symbol}:{interval}"
-            tasks.append(loop.run_in_executor(executor, safe_call, get_oi_history, symbol, interval, 10))
-            tasks.append(loop.run_in_executor(executor, safe_call, get_top_position_ratio, symbol, interval, 1))
-            tasks.append(loop.run_in_executor(executor, safe_call, get_top_account_ratio, symbol, interval, 1))
-            tasks.append(loop.run_in_executor(executor, safe_call, get_global_account_ratio, symbol, interval, 1))
-            tasks.append(loop.run_in_executor(executor, safe_call, calc_smart_sentiment, symbol, interval))
-
     completed = await asyncio.gather(*tasks)
     idx = 0
     for symbol, cycles in dataset.items():
         results["funding"][symbol] = completed[idx]; idx += 1
         results["p24"][symbol] = completed[idx]; idx += 1
         results["oi"][symbol] = completed[idx]; idx += 1
-        for interval in cycles.keys():
-            key = f"{symbol}:{interval}"
-            results["oi_hist"][key] = completed[idx]; idx += 1
-            results["big_pos"][key] = completed[idx]; idx += 1
-            results["big_acc"][key] = completed[idx]; idx += 1
-            results["global_acc"][key] = completed[idx]; idx += 1
-            results["sentiment"][key] = completed[idx]; idx += 1
 
     return results
 
@@ -172,35 +152,91 @@ async def preload_all_api_global(dataset_all):
     print(f"🔄 全局预加载合并了 {len(unified_dataset)} 个币种")
     return await preload_all_api(unified_dataset)
 
-# ================== JSON 提取 ==================
+# ================== JSON 提取（统一版） ==================
 def _extract_decision_block(content: str):
+    """提取 <decision> 标签内的 JSON 列表，支持 Claude HTML 转义形式"""
+    if not content:
+        return None
+
+    # 1️⃣ 先把 HTML/Unicode 转义替换回原始符号
+    content = html.unescape(content)  # \u003c -> <, \u003e -> >
+
     match = re.search(r"<decision>([\s\S]*?)</decision>", content, flags=re.I)
-    if not match: return None
+    if not match:
+        return None
+
     block = match.group(1).strip()
     try:
         parsed = json.loads(block)
-        if isinstance(parsed, list): return parsed
-    except: pass
-    return None
+        if isinstance(parsed, list):
+            return [x for x in parsed if isinstance(x, dict) and "action" in x]
+        if isinstance(parsed, dict) and "action" in parsed:
+            return [parsed]
+    except Exception as e:
+        logging.warning(f"⚠️ JSON 解析失败: {e}")
+        return None
+
+# 同理也可以改 _extract_reasoning_block，解码 HTML 转义
+def _extract_reasoning_block(content: str):
+    """提取 <reasoning> 标签内容，支持 HTML 转义"""
+    if not content:
+        return None
+    content = html.unescape(content)
+    match = re.search(r"<reasoning>([\s\S]*?)</reasoning>", content, flags=re.I)
+    if not match:
+        return None
+    return match.group(1).strip()
 
 def _extract_all_json(content: str):
+    """
+    尝试提取所有可能的交易信号 JSON，
+    兼容 DeepSeek / Gemini / Claude，支持 HTML/Unicode 转义
+    """
+    if not content:
+        return None
+
+    # 1️⃣ 先将 HTML / Unicode 转义解码
+    content = html.unescape(content)  # \u003c -> <, \u003e -> >
+
     results = []
+
+    # 2️⃣ 尝试直接解析整个内容
     try:
         parsed = json.loads(content)
         if isinstance(parsed, list):
             return [x for x in parsed if isinstance(x, dict) and "action" in x]
-    except: pass
+        if isinstance(parsed, dict) and "action" in parsed:
+            return [parsed]
+    except:
+        pass
+
+    # 3️⃣ 尝试从 <decision> 标签中解析
+    decision_match = re.search(r"<decision>([\s\S]*?)</decision>", content, flags=re.I)
+    if decision_match:
+        block = decision_match.group(1).strip()
+        try:
+            parsed = json.loads(block)
+            if isinstance(parsed, list):
+                return [x for x in parsed if isinstance(x, dict) and "action" in x]
+            if isinstance(parsed, dict) and "action" in parsed:
+                return [parsed]
+        except:
+            pass
+
+    # 4️⃣ 匹配单层 JSON 对象的老逻辑，保底解析
     matches = re.findall(r'\{[^{}]*\}', content, flags=re.S)
     for m in matches:
         try:
             obj = json.loads(m)
             if isinstance(obj, dict) and "action" in obj:
                 results.append(obj)
-        except: pass
+        except:
+            pass
+
     return results if results else None
 
 # ================== 持仓拆分 ==================
-def split_positions_batch(account, dataset_all, max_symbols=2):
+def split_positions_batch(account, dataset_all, max_symbols=5):
     """
     拆分持仓批次，每个批次只包含一部分持仓币种 + positions + balance_info
     支持部分币种缺失数据
@@ -242,7 +278,7 @@ def split_positions_batch(account, dataset_all, max_symbols=2):
     return batches
 
 # ================== 批次拆分 ==================
-def split_dataset_by_symbol_limit(dataset: dict, max_symbols=2):
+def split_dataset_by_symbol_limit(dataset: dict, max_symbols=5):
     """
     拆分非持仓币种批次，每批最多 max_symbols 个币种
     支持部分币种缺少数据
@@ -267,234 +303,251 @@ def split_dataset_by_symbol_limit(dataset: dict, max_symbols=2):
     return batches
 
 # ================== 数据格式化 ==================
-def _format_dataset(dataset, preloaded=None):
-    start_time = time.time()
-    text = []
-    append = text.append
+def _build_dataset_json(dataset, preloaded=None):
+    """构建结构化 JSON 数据"""
     account = account_snapshot
+    positions = dataset.get("positions", [])
     balance_info = dataset.get("balance_info") or {
         "balance": account.get("balance"),
         "available": account.get("available"),
         "total_unrealized": account.get("total_unrealized")
     }
-
-    append("========= 📌 当前账户资金状态 =========")
-    append(f"💰 总权益 Balance: {round(balance_info.get('balance', 0), 4)}")
-    # append(f"🔓 可用余额 Available: {round(balance_info.get('available', 0), 4)}")
-    # append(f"📉 总未实现盈亏 PnL: {round(balance_info.get('total_unrealized', 0), 4)}")
-
-    # --- 只显示批次内的持仓币 ---
-    positions = dataset.get("positions", [])
     symbols_in_batch = [k for k in dataset.keys() if k not in ("positions", "balance_info")]
+    
+    # 过滤批次内持仓
     if positions and symbols_in_batch:
         positions = [p for p in positions if p["symbol"] in symbols_in_batch]
-
-    if positions:
-        append("\n📌 当前持仓:")
-        for p in positions:
-            amt = float(p["size"])
-            entry = float(p["entry"])
-            mark = float(p["mark_price"])
-            pnl = float(p["pnl"])
-            side_icon = "🟢 多" if amt > 0 else "🔴 空"
-            pnl_pct = round((mark - entry) / entry * 100, 2) if amt > 0 else round((entry - mark) / entry * 100, 2) if entry > 0 else 0
-            line = (
-                f"{p['symbol']} | {side_icon} | 数量 {abs(amt)} | "
-                f"入场 {entry} → 当前价格 {mark} | 💵 盈亏 {pnl} ({pnl_pct}%)"
-            )
-            pos_side = "LONG" if amt > 0 else "SHORT"
-            tp_sl_orders = tp_sl_cache.get(p['symbol'], {}).get(pos_side, [])
-            if tp_sl_orders:
-                tp_sl_lines = [f"{o['type']}={o['stopPrice']}" for o in tp_sl_orders]
-                line += " | TP/SL: " + ", ".join(tp_sl_lines)
-            else:
-                line += " | TP/SL: 无"
-            append(line)
-    else:
-        append("\n📌 当前无持仓")
-
-    # --- 遍历批次内币种 ---
+    
+    output = {
+        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime()),
+        "balance_info": {
+            "balance": float(balance_info.get("balance", 0)),
+            "available": float(balance_info.get("available", 0)),
+            "total_unrealized": float(balance_info.get("total_unrealized", 0))
+        },
+        "positions": [
+            {
+                "symbol": p["symbol"],
+                "side": "LONG" if float(p["size"]) > 0 else "SHORT",
+                "size": abs(float(p["size"])),
+                "entry": float(p["entry"]),
+                "mark_price": float(p["mark_price"]),
+                "pnl": float(p["pnl"]),
+                "pnl_pct": round((float(p["mark_price"]) - float(p["entry"])) / float(p["entry"]) * 100, 2)
+                           if float(p["size"]) > 0 else 
+                           round((float(p["entry"]) - float(p["mark_price"])) / float(p["entry"]) * 100, 2),
+                "tp_sl": [f"{o['type']}={o['stopPrice']}" 
+                         for o in tp_sl_cache.get(p['symbol'], {}).get("LONG" if float(p["size"]) > 0 else "SHORT", [])]
+            }
+            for p in positions
+        ],
+        "markets": {}
+    }
+    
+    # 构建市场数据
     for symbol in symbols_in_batch:
         cycles = dataset[symbol]
-        append(f"\n============ {symbol} 多周期行情快照 ============")
-        fr     = preloaded.get("funding", {}).get(symbol)
-        p24    = preloaded.get("p24", {}).get(symbol)
+        fr = preloaded.get("funding", {}).get(symbol)
+        p24 = preloaded.get("p24", {}).get(symbol)
         oi_now = preloaded.get("oi", {}).get(symbol)
-        trend_score = calculate_trend_alignment(cycles)
-
-        if p24:
-            append(f"• 24h 涨跌幅: {p24['priceChangePercent']}% → 最新 {p24['lastPrice']} (高 {p24['highPrice']} / 低 {p24['lowPrice']})")
-            append(f"• 24h 成交额: {round(p24['quoteVolume'] / 1e6, 2)}M USD")
-        append(f"💰 当前资金费率 Funding Rate: {fr if fr is not None else '未知'}")
-        append("\n📌 趋势一致性 (Trend Alignment):")
-        append(f"📐 趋势方向: {trend_score['TREND_ALIGNMENT_DIRECTION']}")
-        append(f"📈 综合得分: {trend_score['TREND_ALIGNMENT_SCORE']}/100")
-        append(f"🧩 周期明细: {trend_score['TREND_ALIGNMENT_DETAIL']}")
-
-        for interval in required_intervals:
-            if interval not in cycles:
-                continue
+        
+        market_data = {
+            "price": p24['lastPrice'] if p24 else None,
+            "24h_high": p24['highPrice'] if p24 else None,
+            "24h_low": p24['lowPrice'] if p24 else None,
+            "24h_change_pct": p24['priceChangePercent'] if p24 else None,
+            "24h_volume_usd": round(p24['quoteVolume'] / 1e6, 2) if p24 else None,
+            "funding_rate": fr,
+            "open_interest": oi_now,
+            "timeframes": {}
+        }
+        
+        for interval in cycles.keys():
             data = cycles[interval]
-            kl = data["klines"]
-            ind = data["indicators"]
-            last = kl[-1]
-            append(f"\n--- {interval} ---")
-            append(f"📌 当前周期收盘价格: {last['Close']}")
+            ind = data.get("indicators") or {}
+            market_data["timeframes"][interval] = {
+                "indicators": {
+                    k: round(v, 6) if isinstance(v, float) else v
+                    for k, v in ind.items()
+                }
+            }
 
-            ema_keys = sorted([k for k in ind.keys() if k.startswith("EMA_") and k[4:].isdigit()], key=lambda x: int(x.split("_")[1]))
-            if ema_keys:
-                append("\n📌 趋势指标（EMA）:")
-                for k in ema_keys:
-                    append(f"{k}: {round(ind[k], 6)}")
-                if "EMA_TREND" in ind:
-                    trend = ind["EMA_TREND"]
-                    strength = ind.get("EMA_TREND_STRENGTH")
-                    append(f"📈 EMA 趋势判断: {trend}" + (f" | 强度: {round(strength, 4)}" if strength else ""))
+        output["markets"][symbol] = market_data
+    
+    return output
 
-            append("\n📌 波动率指标:")
-            append(f"ATR14: {ind.get('ATR', '数据不足')}")
-            append(f"ATR14 20周期均值: {ind.get('ATR_MA20', '数据不足')}")
-            append(f"ATR比率: {ind.get('ATR_RATIO', '数据不足')}")
+def build_llm_user_prompt(market_snapshot: dict) -> str:
+    """
+    把“约束文字 + JSON”组装成一次 LLM 的 user content
+    """
+    return f"""
+Below is the current account status and market snapshot data (JSON).
 
-            key = f"{symbol}:{interval}"
-            oi_hist    = preloaded.get("oi_hist", {}).get(key)
-            big_pos    = preloaded.get("big_pos", {}).get(key)
-            big_acc    = preloaded.get("big_acc", {}).get(key)
-            global_acc = preloaded.get("global_acc", {}).get(key)
-            sentiment  = preloaded.get("sentiment", {}).get(key)
+This is a formal trading decision request.
+Please strictly follow the [System Instructions] to complete the multi-timeframe analysis and output a single, unique trading action.
 
-            append(f"\n🧱 当前永续未平仓量 OI: {oi_now if oi_now is not None else '未知'}")
-            if oi_hist: arr = [round(i["openInterest"], 2) for i in oi_hist][-10:]; append(f"• 最新10条历史 OI 数据趋势: {arr}")
-            if big_pos: b = big_pos[-1]; append(f"• 大户持仓量多空比: {b['ratio']} (多 {b['long']}, 空 {b['short']})")
-            if big_acc: b = big_acc[-1]; append(f"• 大户账户数多空比: {b['ratio']} (多 {b['long']}, 空 {b['short']})")
-            if global_acc: g = global_acc[-1]; append(f"• 全网多空人数比: {g['ratio']} (多 {g['long']}, 空 {g['short']})")
-            if sentiment:
-                try:
-                    score = sentiment["sentiment_score"]
-                    fac = sentiment["factors"]
-                    append("\n📌 Smart Sentiment Score:")
-                    append(f"🎯 情绪评分: {score}/100")
-                    append("📊 分项因子(归一化):")
-                    append(f"· OI情绪: {fac['open_interest']}")
-                    append(f"· Funding情绪: {fac['funding_rate']}")
-                    append(f"· 大户情绪: {fac['big_whales']}")
-                    append(f"· 散户反向情绪: {fac['retail_inverse']}")
-                    append(f"· 成交量情绪: {fac['volume_emotion']}")
-                except Exception:
-                    append("\n📌 Smart Sentiment Score: 计算失败")
-            else:
-                append("\n📌 Smart Sentiment Score: 计算失败")
+[Current Account Constraints]
+- Available account balance is limited; overtrading is prohibited; capital must grow steadily
+- Excessive trading and frequent repetitive entries are strictly prohibited
+- If risk or structure is unclear, choosing wait or hold is permitted
 
-            append("\n📌 CVD 指标:")
-            for k in ["CVD", "CVD_MOM", "CVD_DIVERGENCE", "CVD_PEAKFLIP", "CVD_NORM"]:
-                if k in ind:
-                    append(f"{k}: {ind[k]}")
+[Current Account and Market Data]
+<JSON>
+{json_safe_dumps(market_snapshot)}
+</JSON>
+""".strip()
 
-            last_buy  = float(last.get("TakerBuyVolume", 0))
-            last_sell = float(last.get("TakerSellVolume", 0))
-            last_vol  = float(last.get("Volume", 0))
-            ratio     = round(last_buy / last_vol * 100, 2) if last_vol > 0 else 0
-            append("\n📌 主动交易量:")
-            append(f"主动买入量(Taker Buy): {last_buy}")
-            append(f"主动卖出量(Taker Sell): {last_sell}")
-            append(f"主动买入占比: {ratio}%")
-
-            vol_info = calc_volume_compare(kl)
-            if vol_info:
-                append("\n📌 成交量对比:")
-                append(f"当前成交量: {vol_info['current_volume']}")
-                append(f"100根均量: {vol_info['average_volume_100']}")
-                append(f"当前/均量比值: {vol_info['ratio']}")
-
-            opens   = [k["Open"] for k in kl]
-            highs   = [k["High"] for k in kl]
-            lows    = [k["Low"] for k in kl]
-            closes  = [k["Close"] for k in kl]
-            volumes = [k["Volume"] for k in kl]
-            append("\n📌 K线数组格式从旧 → 新:")
-            append(f"open: {opens}")
-            append(f"high: {highs}")
-            append(f"low: {lows}")
-            append(f"close: {closes}")
-            append(f"volume: {volumes}")
-
-    append("\n🧠 请直接输出交易决策，不需要推理过程，只需JSON格式：")
-    append("指令：只输出<decision>标签内的JSON数组，不要任何解释文字。")
-    print(f"[_format_dataset] 执行耗时: {time.time() - start_time:.3f} 秒")
-    return "\n".join(text)
-
-# ================== DeepSeek 批次投喂 ==================
-async def _push_single_batch_deepseek(dataset, preloaded, batch_idx, total_batches, session):
+# ================== AIBTC.VIP 批量投喂 ==================
+async def _push_single_batch_claude(dataset, preloaded, batch_idx, total_batches):
+    """
+    使用 AIBTC.VIP 模型进行批次投喂，兼容 Unicode/HTML 转义，保证 signals 完整
+    """
     loop = asyncio.get_running_loop()
-    formatted_dataset = await loop.run_in_executor(None, _format_dataset, dataset, preloaded)
+    json_data = await loop.run_in_executor(None, _build_dataset_json, dataset, preloaded)
+    user_prompt = await loop.run_in_executor(None, build_llm_user_prompt, json_data)
     system_prompt = await loop.run_in_executor(None, _read_prompt)
+
     payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": [{"role": "system", "content": system_prompt},{"role": "user", "content": formatted_dataset}],
-        "temperature": 0.1,
+        "model": CLAUDE_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0,
         "max_tokens": 8000,
         "stream": False
     }
-    start = time.perf_counter()
-    try:
-        async with session.post(DEEPSEEK_URL, json=payload, headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-            raw = await resp.text()
-            print(f"✅ DeepSeek 批次 {batch_idx} 完成 | {round((time.perf_counter()-start)*1000,2)} ms | HTTP {resp.status}")
-            try:
-                root = json.loads(raw)
-                content = root["choices"][0]["message"]["content"]
-                signals = _extract_decision_block(content) or _extract_all_json(content) or []
-            except: signals = []
-            return {"batch_idx": batch_idx, "formatted_request": formatted_dataset, "signals": signals, "raw_response": raw, "ts": time.time(), "http_status": resp.status}
-    except Exception as e:
-        logging.error(f"❌ DeepSeek 批次 {batch_idx} 失败: {e}")
-        return {"batch_idx": batch_idx, "formatted_request": formatted_dataset, "signals": [], "raw_response": str(e), "ts": time.time(), "http_status": None, "error": str(e)}
 
-# ================== Gemini 批次投喂 ==================
-async def _push_single_batch_gemini(dataset, preloaded, batch_idx, total_batches):
-    loop = asyncio.get_running_loop()
-    formatted_dataset = await loop.run_in_executor(None, _format_dataset, dataset, preloaded)
-    system_prompt = await loop.run_in_executor(None, _read_prompt)
+    max_retries = 3
+    base_timeout = 45  # 超时基准秒数
 
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": formatted_dataset}
-        ]
+    for attempt in range(max_retries):
+        attempt_start = time.perf_counter()
+        current_timeout = base_timeout * (attempt + 1)
 
-        # 使用 generate_content 而非 chat.create
-        resp = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=system_prompt + "\n\n" + formatted_dataset,  # 合并成单条字符串
-            config={
-                "temperature": 0.1,
-                "max_output_tokens": 8000
-            }
-        )
-        content = resp.text
-        signals = _extract_decision_block(content) or _extract_all_json(content) or []
+        try:
+            session = await get_http_session()
 
-        print(f"✅ Gemini 批次 {batch_idx}/{total_batches} 完成 | HTTP 200")
-        return {
-            "batch_idx": batch_idx,
-            "formatted_request": formatted_dataset,
-            "signals": signals,
-            "raw_response": content,
-            "ts": time.time(),
-            "http_status": 200
-        }
+            async with session.post(
+                CLAUDE_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {CLAUDE_API_KEY}"},
+                timeout=aiohttp.ClientTimeout(total=current_timeout)
+            ) as resp:
 
-    except Exception as e:
-        return {
-            "batch_idx": batch_idx,
-            "formatted_request": formatted_dataset,
-            "signals": [],
-            "raw_response": str(e),
-            "ts": time.time(),
-            "http_status": None,
-            "error": str(e)
-        }
+                status = resp.status
+
+                if status != 200:
+                    raise aiohttp.ClientError(f"HTTP {status}")
+
+                raw_text = await resp.text()
+                attempt_time = round((time.perf_counter() - attempt_start) * 1000, 2)
+
+                print(
+                    f"✅ AIBTC.VIP 批次 {batch_idx} 第{attempt+1}次返回 | "
+                    f"{attempt_time}ms | HTTP {status}"
+                )
+
+                content = None
+                reasoning = None
+                signals = []
+                raw_json = None
+                finish_reason = None
+
+                try:
+                    raw_json = json.loads(raw_text)
+                    choice = raw_json.get("choices", [{}])[0]
+                    content = choice.get("message", {}).get("content")
+                    finish_reason = choice.get("finish_reason")
+                    reasoning = _extract_reasoning_block(content)
+
+                    if content:
+                        from html import unescape
+                        content_decoded = unescape(content)
+                        signals = _extract_all_json(content_decoded) or []
+
+                except Exception as parse_err:
+                    logging.warning(f"⚠️ AIBTC.VIP JSON 解析失败: {parse_err}")
+
+                return {
+                    "batch_idx": batch_idx,
+                    "formatted_request": user_prompt,  # ⭐ 已安全序列化
+                    "content": content,
+                    "reasoning": reasoning,
+                    "signals": signals,
+                    "raw_text": raw_text,
+                    "raw_json": raw_json,
+                    "finish_reason": finish_reason,
+                    "http_status": status,
+                    "ts": time.time(),
+                    "attempt": attempt + 1,
+                    "response_time_ms": attempt_time
+                }
+
+        except asyncio.TimeoutError:
+            attempt_time = round((time.perf_counter() - attempt_start) * 1000, 2)
+            print(f"⏱️ AIBTC.VIP 批次 {batch_idx} 第{attempt+1}次超时 ({attempt_time}ms)")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+                continue
+            else:
+                return {
+                    "batch_idx": batch_idx,
+                    "formatted_request": user_prompt,
+                    "signals": [],
+                    "raw_text": None,
+                    "raw_json": None,
+                    "finish_reason": None,
+                    "http_status": None,
+                    "error": f"批次 {batch_idx} 在{max_retries}次尝试后超时",
+                    "ts": time.time(),
+                    "attempt": max_retries,
+                    "response_time_ms": attempt_time
+                }
+
+        except aiohttp.ClientError as e:
+            attempt_time = round((time.perf_counter() - attempt_start) * 1000, 2)
+            print(f"🌐 Claude 批次 {batch_idx} 第{attempt+1}次网络错误: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(3 * (attempt + 1))
+                continue
+            else:
+                return {
+                    "batch_idx": batch_idx,
+                    "formatted_request": user_prompt,
+                    "signals": [],
+                    "raw_text": None,
+                    "raw_json": None,
+                    "finish_reason": None,
+                    "http_status": None,
+                    "error": f"批次 {batch_idx} 网络错误: {e}",
+                    "ts": time.time(),
+                    "attempt": max_retries,
+                    "response_time_ms": attempt_time
+                }
+
+        except Exception as e:
+            attempt_time = round((time.perf_counter() - attempt_start) * 1000, 2)
+            error_msg = f"批次 {batch_idx} 未知错误: {e}"
+            print(f"❌ {error_msg}")
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+                continue
+            else:
+                return {
+                    "batch_idx": batch_idx,
+                    "formatted_request": user_prompt,
+                    "signals": [],
+                    "raw_text": None,
+                    "raw_json": None,
+                    "finish_reason": None,
+                    "http_status": None,
+                    "error": error_msg,
+                    "ts": time.time(),
+                    "attempt": max_retries,
+                    "response_time_ms": attempt_time
+                }
 
 # ================== 通用批量投喂 ==================
 async def push_batch_to_ai():
@@ -510,12 +563,12 @@ async def push_batch_to_ai():
     account = account_snapshot
 
     # --- 1. 拆分持仓批次 ---
-    positions_batches = split_positions_batch(account, dataset_all, max_symbols=2)
+    positions_batches = split_positions_batch(account, dataset_all, max_symbols=5)
     positions_symbols = [p["symbol"] for batch in positions_batches for p in batch.get("positions", [])]
 
     # --- 2. 拆分非持仓币种 ---
     symbol_dataset = {k: v for k, v in dataset_all.items() if k not in positions_symbols}
-    symbol_batches = split_dataset_by_symbol_limit(symbol_dataset, max_symbols=2)
+    symbol_batches = split_dataset_by_symbol_limit(symbol_dataset, max_symbols=5)
 
     # --- 3. 合并所有批次 ---
     batches = positions_batches + symbol_batches
@@ -531,19 +584,58 @@ async def push_batch_to_ai():
     tasks = []
     for idx, batch in enumerate(batches):
         preloaded = preloaded_batches[idx]
-        if AI_PROVIDER == "deepseek":
-            session = await get_global_session()
-            tasks.append(_push_single_batch_deepseek(batch, preloaded, idx+1, len(batches), session))
+        if AI_PROVIDER == "claude":
+            tasks.append(
+                _push_single_batch_claude(batch, preloaded, idx+1, len(batches))
+            )
         else:
-            tasks.append(_push_single_batch_gemini(batch, preloaded, idx+1, len(batches)))
+            raise ValueError(f"未知 AI_PROVIDER: {AI_PROVIDER}")
 
     # --- 6. 执行投喂 ---
     results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 🆕 添加调试输出
+    # print(f"📦 原始 results 类型检查:")
+    # for idx, r in enumerate(results):
+        # print(f"  批次 {idx+1}: type={type(r).__name__}, value={str(r)[:200]}")
+
+    # 统计超时情况
+    success_count = 0
+    timeout_count = 0
+    total_elapsed_time = 0          # 全部耗时
+    success_response_time = 0       # 仅成功耗时
+
+    for r in results:
+        if not isinstance(r, dict):
+            timeout_count += 1
+            continue
+
+        rt = r.get("response_time_ms", 0)
+        total_elapsed_time += rt
+
+        if r.get("http_status") == 200:
+            success_count += 1
+            success_response_time += rt
+        elif "超时" in (r.get("error") or ""):
+            timeout_count += 1
+
+    valid_results = [r for r in results if isinstance(r, dict)]
+    valid_count = len(valid_results)
+    overall_avg = total_elapsed_time / valid_count if valid_count else 0
+
+    print(
+        f"📊 请求统计: 成功 {success_count}/{len(valid_results)} | "
+        f"超时 {timeout_count} | "
+        f"整体平均耗时 {overall_avg:.0f}ms | "
+        f"成功平均耗时 {success_response_time/success_count if success_count else 0:.0f}ms"
+    )
 
     # --- 7. 保存请求/响应到 Redis，并汇总信号 ---
     for r in results:
         if not isinstance(r, dict):
             continue
+
+        # ✅ 使用 json_safe_dumps 保存 Redis
         if r.get("formatted_request"):
             redis_client.rpush(KEY_REQ, json_safe_dumps({
                 "batch_idx": r["batch_idx"],
@@ -553,11 +645,14 @@ async def push_batch_to_ai():
         redis_client.rpush(KEY_RES, json_safe_dumps({
             "batch_idx": r["batch_idx"],
             "signals": r.get("signals", []),
-            "raw_response": r.get("raw_response"),
+            "reasoning": r.get("reasoning"),
+            "content": r.get("content"),
+            "raw_text": r.get("raw_text"),
             "timestamp": r["ts"],
             "http_status": r.get("http_status"),
             "error": r.get("error")
         }))
+
         all_signals.extend(r.get("signals", []))
 
     end_total = time.perf_counter()

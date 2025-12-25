@@ -30,19 +30,30 @@ async def send_tg_trade_signal(ai_results):
         action = res.get("action")
         symbol = res.get("symbol")
 
-        if action not in ("open_long", "open_short", "close_long", "close_short", "reverse"):
+        if action not in ("open_long", "open_short", "close_long", "close_short", "reverse", "increase_position", "decrease_position"):
             continue
 
         sym_display = symbol or "（未提供）"
-        price = _get_latest_5m_close(symbol)
+        price = res.get("entry")
         price_display = price if price is not None else "未知"
 
         msg = (
             f"🚨 AIBTC.VIP 交易信号\n\n"
             f"📌 交易对: {sym_display}\n"
-            f"⏱️ 最新价: {price_display}\n"
             f"🎯 动作: {action}\n"
         )
 
+        if res.get("entry") is not None:
+            msg += f"📍 最新价: {res['entry']}\n"
+
+        if res.get("stop_loss") is not None:
+            msg += f"🛑 止损: {res['stop_loss']}\n"
+
+        if res.get("take_profit") is not None:
+            msg += f"🎯 止盈: {res['take_profit']}\n"
+
+        if res.get("reason"):
+            msg += f"\n🧠 原因:\n{res['reason']}\n"
+
         # print(f"📌 生成推送内容:\n{msg}")
-        queue_message(msg)
+        queue_message(msg, topic="Trading-signals")

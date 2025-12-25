@@ -6,15 +6,6 @@ from position_cache import position_records   # ← 引入缓存
 # 连接账户
 client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
-# ===== 新版：设置 recvWindow 与服务器时间检测 =====
-try:
-    client.recvWindow = 10000  # 可选：10秒窗口，防止网络延迟
-    # 检测服务器时间是否能正常获取
-    server_time = client.futures_time()  # 或 client.get_server_time()
-    print(f"✅ Binance 时间同步完成，服务器时间: {server_time['serverTime']}")
-except Exception as e:
-    print("⚠ Binance 时间同步失败:", e)
-    
 # 🔥 全量账户数据缓存 — DeepSeek 投喂直接读取
 account_snapshot = {
     "balance": 0.0,
@@ -25,7 +16,6 @@ account_snapshot = {
 tp_sl_cache = {}
 
 TP_SL_TYPES = ["STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET"]
-
 
 def get_tp_sl_orders(symbol, position_side):
     """

@@ -9,6 +9,7 @@ def clear_redis():
     keep = {
         "deepseek_analysis_request_history",
         "deepseek_analysis_response_history",
+        "profit:ultra_simple",
         "trading_records"
     }
 
