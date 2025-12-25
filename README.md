@@ -1,95 +1,52 @@
-https://t.me/aibtcchina
+AIBTCVIP电报群：https://t.me/aibtcchina
 
-<img width="602" height="689" alt="image" src="https://github.com/user-attachments/assets/eb6bbc44-4fe6-456e-856c-71804cc08ee6" />
+<img width="922" height="703" alt="image" src="https://github.com/user-attachments/assets/4e0c212d-ed44-4403-aff6-544702586ddf" />
 
-更新于:2025/12/13
 
-提示词较为严格,可自行调整改动,欢迎魔改.
+更新于:2025/12/25
 
-默认禁止输出思维链,如需打开deepseek_batch_pusher.py文件注释掉
-
-291-292行
-
-#append("\n🧠 请直接输出交易决策，不需要推理过程，只需JSON格式：")
-
-#append("指令：只输出<decision>标签内的JSON数组，不要任何解释文字。")
-
-打开289行
-
-append("\n🧠 现在请分析并输出决策（简洁思维链 < 150 字 + JSON）")
-
-如果需要完成思维链用下面这行
-
-append("\n🧠 现在请分析并输出决策（思维链 + JSON）")
-
-新增加了止盈止损条件单
-动态调整止盈止损
-反手开单
-
-提示词以下部分关系着你的开仓金额和杠杆大小,请谨慎.
-
-💰 仓位计算阶段
-
-### 核心计算公式
-**position_size = 账户总权益 × 杠杆系数 × 波动率调整因子**
-
-### 杠杆系数确定规则
-根据最终置信度确定：
-- 置信度 ≥ 0.90 → 杠杆系数 = 2.4
-- 0.80 ≤ 置信度 < 0.90 → 杠杆系数 = 1.2
-- 0.70 ≤ 置信度 < 0.80 → 杠杆系数 = 0.4
-- 置信度 < 0.70 → 禁止开仓
-
-### 波动率调整因子确定规则
-根据综合波动率得分确定：
-- 得分 ≥ 85 → 调整因子 = 1.2（优秀，可适当放大）
-- 75 ≤ 得分 < 85 → 调整因子 = 1.0（良好，正常仓位）
-- 60 ≤ 得分 < 75 → 调整因子 = 0.7（一般，减仓30%）
-- 得分 < 60 → 调整因子 = 0.5（较差，减仓50%）
-
-### 黄色警报特殊规则
-当处于黄色区间（60 ≤ 综合得分 < 75）时：
-- 杠杆系数强制覆盖为 **0.4**（无论置信度多少）
-- 波动率调整因子固定为 **0.7**
-- **最终仓位效果**：0.4 × 0.7 = 0.28 ≈ 正常仓位的28%
-
-### 计算示例
-**绿色区间示例**：
-- 账户总权益：$1000
-- 置信度：0.85 → 杠杆系数 = 1.2
-- 综合得分：82分（良好） → 调整因子 = 1.0
-- position_size = $1000 × 1.2 × 1.0 = **$1200**
-
-**黄色区间示例**：
-- 账户总权益：$1000
-- 置信度：0.78 → 基础杠杆系数 = 0.4
-- 综合得分：68分（一般） → 调整因子 = 0.7
-- **黄色警报强制**：杠杆系数 = 0.4
-- position_size = $1000 × 0.4 × 0.7 = **$280**
-
-重点:这部分内容一定不能删除,其它的随便改.
-
-表单要修改配置文件config.py填入您的币安公私钥就可以了
-
-手机安装所需要的库，其他不懂的就问ai
-
-自己去研究吧
+配置文件config.py填入您的币安API就可以了
 
 pip install -r requirements.txt
 
 启动:python3 main.py
 
-启动前端:python3 api_history.py
-
 前端访问地址：http://127.0.0.1:8600
 
-<img width="1918" height="903" alt="image" src="https://github.com/user-attachments/assets/0824bffa-b8c3-4f63-add3-acff1725dba9" />
+打个广告：
 
-<img width="1918" height="903" alt="image" src="https://github.com/user-attachments/assets/728faf5f-2767-4303-905a-f52dcf46b905" />
+📢 AIBTCVIP 中转 API 优惠公告
 
-<img width="1918" height="903" alt="image" src="https://github.com/user-attachments/assets/9f1c88d1-c787-482c-9016-69ebf0b468ce" />
+更强模型 · 更低价格 · 更易落地
 
-<img width="1918" height="903" alt="image" src="https://github.com/user-attachments/assets/70422b46-50ff-4477-badd-ec932f943837" />
+AIBTCVIP 中转 API 致力于为开发者提供稳定、高效、易于接入的 Web API 服务，一站式整合几乎所有主流 AI 大模型能力，帮助开发者和企业用户快速落地 AI 应用。
+
+为回馈用户支持，平台现推出限时充值优惠活动：
+
+💰 充值 6 折优惠
+
+🎉 充值 100 元，仅需实付 61 元
+
+等效 约 6 折价格
+
+充值金额可直接用于 API 调用，无隐藏费用
+
+✨ 平台优势
+
+🚀 模型更全：多种主流 AI 大模型统一接入
+
+💰 成本更低：中转计费 + 充值折扣，显著降低使用成本
+
+🔧 接入更简单：统一 API 接口，快速部署，易于维护
+
+🛡 运行更稳定：面向生产环境优化，适合长期使用
+
+AIBTCVIP 致力于打造高性价比、易落地的 AI 接口服务平台，让开发者专注于业务创新，而非底层集成。
+
+👉 立即注册并享受 6 折充值优惠
+
+🔗 https://api.aibtc.vip/register?aff=hjJ7
+
 
 
 
