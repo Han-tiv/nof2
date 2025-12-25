@@ -9,8 +9,8 @@ TELEGRAM_BOT_TOKEN = "11111111111111"
 TELEGRAM_CHAT_ID = "-11111111111"
 
 #AIBTC.VIP大模型配置
-CLAUDE_API_KEY = "1111111111111111"  #模型key
-CLAUDE_MODEL = "claude-opus-4-5-20251101"  #模型名称
+CLAUDE_API_KEY = "1111111111111111"  #对应模型的 key
+CLAUDE_MODEL = "claude-opus-4-5-20251101"  #对应模型的名称，gpt-5.2/gemini-3-pro-preview/deepseek-chat
 CLAUDE_URL = "https://api.aibtc.vip/v1/chat/completions"
 
 AI_PROVIDER = "claude"  # 这里不能改
@@ -59,3 +59,4 @@ TOPIC_MAP = {
 }
 
 DEFAULT_TOPIC = None   # None = 主聊天
+
