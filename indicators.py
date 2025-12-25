@@ -2,13 +2,11 @@
 import json
 import numpy as np
 import talib
-
 from database import redis_client
 from deepseek_batch_pusher import add_to_batch
 from config import timeframes, EMA_CONFIG, STRUCTURE_PARAMS
 from market_structure import MarketStructure
 from payload_builder import save_unified_payload
-
 
 # ==========================================================
 # 区间位置：支持 above_range / below_range
@@ -174,6 +172,32 @@ def calc_15m_signal(rows_15m, structure_15m: dict, out_of_range_15m: bool, atr_1
 
     return "none"
 
+def pack_klines(rows, limit=20, include_v=True):
+    """
+    rows: [{"Timestamp":..., "Open":..., "High":..., "Low":..., "Close":..., "Volume":...}, ...]
+    输出紧凑格式，便于投喂：[{t,o,h,l,c,v}, ...]
+    """
+    if not rows:
+        return []
+
+    cut = rows[-limit:] if len(rows) > limit else rows
+    out = []
+    for r in cut:
+        k = {
+            "t": int(r["Timestamp"]),
+            "o": float(r["Open"]),
+            "h": float(r["High"]),
+            "l": float(r["Low"]),
+            "c": float(r["Close"]),
+        }
+        if include_v:
+            # 你的 redis 行里字段名不确定：可能是 "Volume" 或 "Vol" 或 "QuoteVolume"
+            v = r.get("Volume", r.get("Vol", r.get("volume", None)))
+            if v is not None:
+                k["v"] = float(v)
+        out.append(k)
+    return out
+
 # ==========================================================
 # 🔥 计算单周期指标
 # ==========================================================
@@ -273,6 +297,7 @@ def calculate_signal(symbol: str, interval: str):
     # ------------------------------
     signal = "none"
     tf4h_snapshot = None
+    klines = None
 
     if interval == "15m":
         tf4h_snapshot = get_tf_snapshot(symbol, "4h")
@@ -300,6 +325,9 @@ def calculate_signal(symbol: str, interval: str):
             rl4, rh4 = s4.get("range_low"), s4.get("range_high")
             candle_events["range_break_4h_box"] = classify_range_break_15m(rows, rl4, rh4, atr_current)
 
+        # ✅ 15m: 打包最近 N 根 K 线
+        klines = pack_klines(rows, limit=20, include_v=True)
+    
     # ------------------------------
     # ✅ 输出
     # ------------------------------
@@ -327,6 +355,9 @@ def calculate_signal(symbol: str, interval: str):
         "signal": signal,
     }
 
+    if interval == "15m":
+        indicators["klines"] = klines
+        
     # ------------------------------
     # ✅ 1) 写快照
     # ------------------------------

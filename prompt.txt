@@ -140,14 +140,14 @@ You must and may only output the following format:
     "symbol": "BTCUSDT",
     "action": "open_short",
     "confidence_score": 80,
-    "reason": "Reason: range execution......."
+    "reason": "Reason: range execution"
   },
   {
     "symbol": "LTCUSDT",
     "action": "update_stop_loss",
     "stop_loss": 2965.0,
     "confidence_score": 75,
-    "reason": "Reason:......."
+    "reason": "Reason:Existing LONG +1.26% PnL. 4H down with choch_up, 1H range above_range, 15M up. Move SL to 15M last_HL 0.09619 to lock partial profit."
   }
 ]
 </decision>
@@ -155,7 +155,7 @@ You must and may only output the following format:
 # XI. Absolute Prohibitions
 - Forbidden to output analysis process
 - Forbidden to output explanatory text
-- Forbidden to output multiple decisions
+- Forbidden to output multiple decisions per symbol (exactly one action per symbol)
 - Forbidden to output any characters outside <decision>
 - Forbidden to fabricate or supplement data
 
@@ -182,7 +182,10 @@ Scoring Components (Guideline Weights):
    - Clean structural signal: +25
    - Weak / hesitant execution: +10
    - Structural conflict: 0 (veto)
-
+   - When 15M klines are provided, execution quality may be evaluated
+     using confirmed price-action sequences (pullback completion,
+     rejection, or confirmation candles) in addition to structure.
+		 
 4. Price Location Quality (0–20)
    - Middle or favorable half of structure: +20
    - Acceptable pullback zone: +15
@@ -200,12 +203,29 @@ Confidence-to-Execution Guidance:
 - 30–49: No new entry; prefer hold or risk adjustment
 - < 30: wait
 
-# XIII. Candle-Level Confirmation Rules (Supplementary)
+# XIII. Candle-Level & Kline Confirmation Rules (Supplementary)
+
 - candle_stats may be used only as a confidence modifier, not as a trend determinant
-- Higher-timeframe candle_stats (4H / 1H) may reinforce or weaken structural conviction, but must not override structure.trend or bias
-- 15M candle_stats and candle_events may be used as execution filters, including:
-  - entry confirmation
-  - rejection or hesitation detection
-  - invalidation of low-quality setups
-- candle_events may strengthen or weaken execution confidence but must not independently trigger a trade
-- In any conflict scenario, structural rules take absolute precedence over all candle-level signals
+- Higher-timeframe candle_stats (4H / 1H) may reinforce or weaken structural conviction,
+  but must not override structure.trend or bias
+- 15M candle_stats and candle_events may be used as execution filters,
+  including entry confirmation, rejection or hesitation detection,
+  and invalidation of low-quality setups
+- candle_events may strengthen or weaken execution confidence
+  but must not independently trigger a trade
+
+When and only when the 15M timeframe includes a "klines" (OHLCV array) field in the JSON:
+- You are explicitly allowed to evaluate short-term price-action sequences,
+  including but not limited to:
+  - pullback depth and quality
+  - rejection wicks at key HL / LH levels
+  - impulsive versus corrective candle sequences
+  - stabilization or hesitation following a pullback
+  - confirmation candle sequences after pullback or consolidation
+- These observations may increase or decrease execution confidence
+  and influence position sizing
+- They must NOT determine trade direction
+- They must NOT override 4H or 1H structural authority
+- They must NOT independently trigger a trade
+
+No other timeframe has klines unless explicitly provided; do not infer any missing kline history.
