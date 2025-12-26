@@ -3,6 +3,7 @@ from market_structure import MarketStructure
 #币安账号API
 BINANCE_API_KEY = "111111111111111"
 BINANCE_API_SECRET = "1111111111111111"
+BINANCE_ENVIRONMENT = False # False 实盘   True 模拟盘
 
 #TG配置
 TELEGRAM_BOT_TOKEN = "11111111111111"
@@ -59,4 +60,5 @@ TOPIC_MAP = {
 }
 
 DEFAULT_TOPIC = None   # None = 主聊天
+
 
