@@ -1,10 +1,10 @@
 import time
 from binance.client import Client
-from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_ENVIRONMENT
 from position_cache import position_records   # ← 引入缓存
 
 # 连接账户
-client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET, testnet=BINANCE_ENVIRONMENT)
 
 # 🔥 全量账户数据缓存 — DeepSeek 投喂直接读取
 account_snapshot = {

@@ -8,6 +8,7 @@ from config import timeframes, EMA_CONFIG, STRUCTURE_PARAMS
 from market_structure import MarketStructure
 from payload_builder import save_unified_payload
 
+
 # ==========================================================
 # 区间位置：支持 above_range / below_range
 # ==========================================================
@@ -34,8 +35,8 @@ def calc_range_location(close: float, range_low: float, range_high: float) -> di
 
     return {"pos": pos, "location": loc, "out_of_range": False
 
+            }
 
-    }
 
 # ==========================================================
 # 结构分析器：按周期初始化
@@ -45,12 +46,14 @@ STRUCTURE_CONFIG = {
     for tf, params in STRUCTURE_PARAMS.items()
 }
 
+
 # ==========================================================
 # 将单周期结果快照写入 Redis（供聚合器统一裁判/投喂GPT）
 # ==========================================================
 def save_signal_snapshot(symbol: str, interval: str, indicators: dict, ttl_sec: int = 600):
     key = f"signal_snapshot:{symbol}:{interval}"
     redis_client.set(key, json.dumps(indicators, ensure_ascii=False), ex=ttl_sec)
+
 
 # ==========================================================
 # 读取 TF 快照（用于 15m signal 受“制度/位置”约束）
@@ -61,6 +64,7 @@ def get_tf_snapshot(symbol: str, tf: str):
         return json.loads(v) if v else None
     except Exception:
         return None
+
 
 # ==========================================================
 # range_break 分类：假突破 / 真突破（15m 用 4H 箱体边界判断）
@@ -116,10 +120,12 @@ def classify_range_break_15m(rows_15m, range_low: float, range_high: float, atr_
 
     return "none"
 
+
 # ==========================================================
 # 15m 触发器：受 4H 制度/位置约束 + 假/真突破分类
 # ==========================================================
-def calc_15m_signal(rows_15m, structure_15m: dict, out_of_range_15m: bool, atr_15m: float | None, tf4h_snapshot: dict | None) -> str:
+def calc_15m_signal(rows_15m, structure_15m: dict, out_of_range_15m: bool, atr_15m: float | None,
+                    tf4h_snapshot: dict | None) -> str:
     """
     返回：
       - none
@@ -172,6 +178,7 @@ def calc_15m_signal(rows_15m, structure_15m: dict, out_of_range_15m: bool, atr_1
 
     return "none"
 
+
 def pack_klines(rows, limit=20, include_v=True):
     """
     rows: [{"Timestamp":..., "Open":..., "High":..., "Low":..., "Close":..., "Volume":...}, ...]
@@ -197,6 +204,7 @@ def pack_klines(rows, limit=20, include_v=True):
                 k["v"] = float(v)
         out.append(k)
     return out
+
 
 # ==========================================================
 # 🔥 计算单周期指标
@@ -327,7 +335,7 @@ def calculate_signal(symbol: str, interval: str):
 
         # ✅ 15m: 打包最近 N 根 K 线
         klines = pack_klines(rows, limit=20, include_v=True)
-    
+
     # ------------------------------
     # ✅ 输出
     # ------------------------------
@@ -357,7 +365,7 @@ def calculate_signal(symbol: str, interval: str):
 
     if interval == "15m":
         indicators["klines"] = klines
-        
+
     # ------------------------------
     # ✅ 1) 写快照
     # ------------------------------
@@ -376,6 +384,7 @@ def calculate_signal(symbol: str, interval: str):
         if payload:
             ref = payload["referee"]
             _ = ref.get("strategy_type")
+
 
 def calculate_signal_single(symbol: str):
     for tf in timeframes:

@@ -3,11 +3,11 @@ from database import redis_client
 import json
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
-from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_ENVIRONMENT
 from account_positions import get_account_status
 import math
 
-client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET, testnet=BINANCE_ENVIRONMENT)
 REDIS_KEY = "trading_records"
 
 TP_SL_TYPES = {

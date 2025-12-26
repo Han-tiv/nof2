@@ -1,7 +1,7 @@
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 import time
-from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_ENVIRONMENT
 
 def get_max_leverage(client: Client, symbol: str) -> int:
     """
@@ -16,7 +16,7 @@ def get_max_leverage(client: Client, symbol: str) -> int:
     )
 
 def main():
-    client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+    client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET, testnet=BINANCE_ENVIRONMENT)
 
     exchange_info = client.futures_exchange_info()
 

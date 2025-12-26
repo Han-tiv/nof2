@@ -235,6 +235,75 @@ def _extract_all_json(content: str):
 
     return results if results else None
 
+def merge_market_snapshots(batch_results: list):
+    """
+    把多个 batch 的 formatted_request 中的 <JSON> 合并成一个
+    风格与单 batch 完全一致
+    """
+    merged = None
+
+    for r in batch_results:
+        if not isinstance(r, dict):
+            continue
+
+        req = r.get("formatted_request")
+        if not req:
+            continue
+
+        m = re.search(r"<JSON>([\s\S]*?)</JSON>", req)
+        if not m:
+            continue
+
+        snapshot = json.loads(html.unescape(m.group(1)))
+
+        if merged is None:
+            # 第一份作为骨架
+            merged = snapshot
+        else:
+            # 只合并 markets
+            merged["markets"].update(snapshot.get("markets", {}))
+
+    return merged
+
+def merge_llm_responses(batch_results: list):
+    """
+    合并多个 batch 的 LLM 返回，风格与单 batch 完全一致
+    """
+    merged_content = []
+    merged_reasoning = []
+    merged_signals = []
+
+    http_status = 200
+    finish_reason = None
+
+    for r in batch_results:
+        if not isinstance(r, dict):
+            continue
+
+        if r.get("content"):
+            merged_content.append(r["content"])
+
+        if r.get("reasoning"):
+            merged_reasoning.append(r["reasoning"])
+
+        if r.get("signals"):
+            merged_signals.extend(r["signals"])
+
+        if r.get("http_status") != 200:
+            http_status = r.get("http_status")
+
+        if not finish_reason:
+            finish_reason = r.get("finish_reason")
+
+    return {
+        "content": "\n\n".join(merged_content) if merged_content else None,
+        "reasoning": "\n\n".join(merged_reasoning) if merged_reasoning else None,
+        "signals": merged_signals,
+        "http_status": http_status,
+        "finish_reason": finish_reason,
+        "timestamp": time.time()
+    }
+
 # ================== 持仓拆分 ==================
 def split_positions_batch(account, dataset_all, max_symbols=5):
     """
@@ -419,7 +488,7 @@ async def _push_single_batch_claude(dataset, preloaded, batch_idx, total_batches
     }
 
     max_retries = 3
-    base_timeout = 45  # 超时基准秒数
+    base_timeout = 15  # 超时基准秒数
 
     for attempt in range(max_retries):
         attempt_start = time.perf_counter()
@@ -554,7 +623,7 @@ async def push_batch_to_ai():
     if not _is_ready_for_push():
         return None
 
-    start_total = time.perf_counter()  # 记录总开始时间
+    start_total = time.perf_counter()
 
     dataset_all = batch_cache.copy()
     batch_cache.clear()
@@ -564,7 +633,9 @@ async def push_batch_to_ai():
 
     # --- 1. 拆分持仓批次 ---
     positions_batches = split_positions_batch(account, dataset_all, max_symbols=5)
-    positions_symbols = [p["symbol"] for batch in positions_batches for p in batch.get("positions", [])]
+    positions_symbols = [
+        p["symbol"] for batch in positions_batches for p in batch.get("positions", [])
+    ]
 
     # --- 2. 拆分非持仓币种 ---
     symbol_dataset = {k: v for k, v in dataset_all.items() if k not in positions_symbols}
@@ -573,7 +644,7 @@ async def push_batch_to_ai():
     # --- 3. 合并所有批次 ---
     batches = positions_batches + symbol_batches
 
-    # --- 4. 预加载，只针对批次里的币种 ---
+    # --- 4. 预加载 ---
     preloaded_batches = []
     for batch in batches:
         symbols_only = {k: v for k, v in batch.items() if k not in ("positions", "balance_info")}
@@ -586,7 +657,7 @@ async def push_batch_to_ai():
         preloaded = preloaded_batches[idx]
         if AI_PROVIDER == "claude":
             tasks.append(
-                _push_single_batch_claude(batch, preloaded, idx+1, len(batches))
+                _push_single_batch_claude(batch, preloaded, idx + 1, len(batches))
             )
         else:
             raise ValueError(f"未知 AI_PROVIDER: {AI_PROVIDER}")
@@ -594,16 +665,11 @@ async def push_batch_to_ai():
     # --- 6. 执行投喂 ---
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # 🆕 添加调试输出
-    # print(f"📦 原始 results 类型检查:")
-    # for idx, r in enumerate(results):
-        # print(f"  批次 {idx+1}: type={type(r).__name__}, value={str(r)[:200]}")
-
-    # 统计超时情况
+    # --- 统计 ---
     success_count = 0
     timeout_count = 0
-    total_elapsed_time = 0          # 全部耗时
-    success_response_time = 0       # 仅成功耗时
+    total_elapsed_time = 0
+    success_response_time = 0
 
     for r in results:
         if not isinstance(r, dict):
@@ -624,39 +690,48 @@ async def push_batch_to_ai():
     overall_avg = total_elapsed_time / valid_count if valid_count else 0
 
     print(
-        f"📊 请求统计: 成功 {success_count}/{len(valid_results)} | "
+        f"📊 请求统计: 成功 {success_count}/{valid_count} | "
         f"超时 {timeout_count} | "
         f"整体平均耗时 {overall_avg:.0f}ms | "
-        f"成功平均耗时 {success_response_time/success_count if success_count else 0:.0f}ms"
+        f"成功平均耗时 {success_response_time / success_count if success_count else 0:.0f}ms"
     )
 
-    # --- 7. 保存请求/响应到 Redis，并汇总信号 ---
+    # ================== ✅ Redis：单次投喂风格合并 ==================
+
+    round_ts = time.time()
+
+    # -------- KEY_REQ：合并后的完整 prompt --------
+    merged_snapshot = merge_market_snapshots(results)
+
+    if merged_snapshot:
+        merged_user_prompt = build_llm_user_prompt(merged_snapshot)
+
+        redis_client.rpush(
+            KEY_REQ,
+            json_safe_dumps({
+                "timestamp": round_ts,
+                "request": merged_user_prompt
+            })
+        )
+
+    # -------- KEY_RES：合并后的完整模型回复 --------
+    merged_response = merge_llm_responses(results)
+
+    redis_client.rpush(
+        KEY_RES,
+        json_safe_dumps(merged_response)
+    )
+
+    # 汇总 signals（给函数返回值用）
     for r in results:
-        if not isinstance(r, dict):
-            continue
-
-        # ✅ 使用 json_safe_dumps 保存 Redis
-        if r.get("formatted_request"):
-            redis_client.rpush(KEY_REQ, json_safe_dumps({
-                "batch_idx": r["batch_idx"],
-                "request": r["formatted_request"],
-                "timestamp": r["ts"]
-            }))
-        redis_client.rpush(KEY_RES, json_safe_dumps({
-            "batch_idx": r["batch_idx"],
-            "signals": r.get("signals", []),
-            "reasoning": r.get("reasoning"),
-            "content": r.get("content"),
-            "raw_text": r.get("raw_text"),
-            "timestamp": r["ts"],
-            "http_status": r.get("http_status"),
-            "error": r.get("error")
-        }))
-
-        all_signals.extend(r.get("signals", []))
+        if isinstance(r, dict):
+            all_signals.extend(r.get("signals", []))
 
     end_total = time.perf_counter()
-    print(f"📊 请求统计: 投喂批次 {len(results)} | 总耗时 {round((end_total - start_total), 2)} 秒")
+    print(
+        f"📊 请求统计: 投喂批次 {len(results)} | "
+        f"总耗时 {round((end_total - start_total), 2)} 秒"
+    )
 
     return all_signals if all_signals else None
 
