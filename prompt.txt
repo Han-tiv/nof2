@@ -251,20 +251,46 @@ You MUST output ALL symbols from the JSON, each with ONE action:
 
 <decision>
 [
-  {
-    "symbol": "ETHUSDT",
-    "action": "update_stop_loss",
-    "reason": "Brief explanation (1-2 sentences)",
-    "risk_factors": ["Key risk 1"],
-    "confidence": 0.85
-  },
-  {
-    "symbol": "BTCUSDT",
-    "action": "hold",
-    "reason": "Brief explanation (1-2 sentences)",
-    "risk_factors": [],
-    "confidence": 0.70
-  }
+	{
+		"symbol": "ETHUSDT",
+		"action": "update_stop_loss",
+		"stop_loss": 2980.32,
+		"reason": "Position +0.8% profit, 4h structure shifted, move stop to breakeven to protect capital",
+		"risk_factors": ["15m showing minor weakness"],
+		"confidence": 0.85
+	},
+	{
+		"symbol": "BTCUSDT",
+		"action": "hold",
+		"reason": "4h uptrend intact, position profitable, structure still valid with no adjustment needed",
+		"risk_factors": [],
+		"confidence": 0.75
+	},
+	{
+		"symbol": "SOLUSDT",
+		"action": "close_long",
+		"reason": "4h trend reversed down, position against trend for 2 candles, loss approaching -1.5%",
+		"risk_factors": ["Trend reversal confirmed", "No support nearby"],
+		"confidence": 0.90
+	},
+	{
+		"symbol": "ADAUSDT",
+		"action": "open_long",
+		"entry": 2984.14,
+		"position_size": 14996.79,
+		"stop_loss": 2950.0,
+		"take_profit": 3050.0,
+		"reason": "4h range, 1h/15m aligned bullish, price above EMA with volume surge, good R/R",
+		"risk_factors": ["Funding rate slightly elevated"],
+		"confidence": 0.80
+	},
+	{
+		"symbol": "DOGEUSDT",
+		"action": "wait",
+		"reason": "15m signals conflict, 4h mid-range no clear bias, insufficient confidence to enter",
+		"risk_factors": ["Choppy structure", "Low volume"],
+		"confidence": 0.30
+	}
 ]
 </decision>
 
@@ -346,70 +372,6 @@ For each symbol in markets:
 
 7. **Output ONE action**
    - From the 9 allowed actions
-
----
-
-# VIII. EXAMPLES OF GOOD REASONING
-
-**Existing position - adjust stop:**
-```json
-{
-  "symbol": "ETHUSDT",
-  "action": "update_stop_loss",
-  "stop_loss": 2980.32,
-  "reason": "Position +0.8% profit, 4h structure shifted, move stop to breakeven to protect capital",
-  "risk_factors": ["15m showing minor weakness"],
-  "confidence": 0.85
-}
-```
-
-**Existing position - hold:**
-```json
-{
-  "symbol": "BTCUSDT",
-  "action": "hold",
-  "reason": "4h uptrend intact, position profitable, structure still valid with no adjustment needed",
-  "risk_factors": [],
-  "confidence": 0.75
-}
-```
-
-**Existing position - close:**
-```json
-{
-  "symbol": "SOLUSDT",
-  "action": "close_long",
-  "reason": "4h trend reversed down, position against trend for 2 candles, loss approaching -1.5%",
-  "risk_factors": ["Trend reversal confirmed", "No support nearby"],
-  "confidence": 0.90
-}
-```
-
-**No position - open:**
-```json
-{
-  "symbol": "ADAUSDT",
-  "action": "open_long",
-  "entry": 2984.14,
-  "position_size": 14996.79,
-  "stop_loss": 2950.0,
-  "take_profit": 3050.0,
-  "reason": "4h range, 1h/15m aligned bullish, price above EMA with volume surge, good R/R",
-  "risk_factors": ["Funding rate slightly elevated"],
-  "confidence": 0.80
-}
-```
-
-**No position - wait:**
-```json
-{
-  "symbol": "DOGEUSDT",
-  "action": "wait",
-  "reason": "15m signals conflict, 4h mid-range no clear bias, insufficient confidence to enter",
-  "risk_factors": ["Choppy structure", "Low volume"],
-  "confidence": 0.30
-}
-```
 
 ---
 
