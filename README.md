@@ -4,7 +4,7 @@ youtube：https://www.youtube.com/@AIBTCVIP
 
 X：https://x.com/Aibtcvip
 
-实盘地址：https://up.aibtc.vip/
+实盘地址：https://up.aibtc.vip/ 或 https://v1.aibtc.vip/
 
 <img width="922" height="703" alt="image" src="https://github.com/user-attachments/assets/4e0c212d-ed44-4403-aff6-544702586ddf" />
 
