@@ -1,10 +1,9 @@
-aiohttp~=3.13.2
-fastapi~=0.127.0
-numpy~=2.4.0
+aiohttp
+fastapi
+numpy
 protobuf
 python_binance
-redis~=7.1.0
-Requests~=2.32.5
+redis
+Requests
 ta_lib
-uvicorn~=0.40.0
-binance~=0.3.95
+uvicorn
